@@ -35,8 +35,10 @@ public class WorldPowerEvents {
     private static final int TREE_SCAN_HORIZONTAL_RADIUS = 8;
     private static final int TREE_SCAN_DOWN = 4;
     private static final int TREE_SCAN_UP = 48;
-    private static final int LEAF_SEARCH_RADIUS = 6;
+    private static final int LEAF_SEARCH_RADIUS = 4;
     private static final int BRANCH_LOG_SEARCH_RADIUS = 2;
+    private static final int MIN_TREE_VERTICAL_RUN = 3;
+    private static final int MIN_SUPPORTED_TREE_LEAVES = 4;
     private static final int DETACHED_BRANCH_MAX_LOGS = 6;
     private static final int DETACHED_BRANCH_MAX_VERTICAL_RUN = 2;
 
@@ -213,19 +215,24 @@ public class WorldPowerEvents {
                 final int[] maxBlocks = {64};
                 ActiveOriginService.forEachOfType(sp, TreeFellingPower.class, cfg ->
                     maxBlocks[0] = Math.max(maxBlocks[0], cfg.maxBlocks()));
-                fellTree(sl, pos, state, maxBlocks[0]);
+                fellTree(sl, pos, state, maxBlocks[0], pos);
             }
         }
     }
 
-    private static void fellTree(ServerLevel level, BlockPos origin, BlockState originState, int maxBlocks) {
+    private static boolean fellTree(ServerLevel level, BlockPos origin, BlockState originState, int maxBlocks, BlockPos excludedLog) {
         Map<BlockPos, BlockPos> parents = new HashMap<>();
         int scanLimit = Math.max(maxBlocks * 4, 128);
         Set<BlockPos> connectedLogs = collectConnectedTreeLogs(level, origin, originState, scanLimit, parents);
-        if (connectedLogs.isEmpty()) return;
+        if (connectedLogs.isEmpty()) return retryFromAbove(level, origin, originState, maxBlocks, excludedLog);
+        if (maxVerticalRun(connectedLogs) < MIN_TREE_VERTICAL_RUN) {
+            return retryFromAbove(level, origin, originState, maxBlocks, excludedLog);
+        }
 
         Set<BlockPos> naturalLeaves = collectNaturalLeaves(level, origin, connectedLogs);
-        if (naturalLeaves.isEmpty()) return;
+        if (naturalLeaves.size() < MIN_SUPPORTED_TREE_LEAVES) {
+            return retryFromAbove(level, origin, originState, maxBlocks, excludedLog);
+        }
 
         Set<BlockPos> logsToBreak = new HashSet<>(connectedLogs);
         for (BlockPos leaf : naturalLeaves) {
@@ -249,9 +256,9 @@ public class WorldPowerEvents {
                 }
             }
         }
-        if (logsToBreak.isEmpty()) return;
+        if (logsToBreak.isEmpty()) return false;
 
-        logsToBreak.remove(origin);
+        logsToBreak.remove(excludedLog);
         List<BlockPos> ordered = new ArrayList<>(logsToBreak);
         ordered.sort(Comparator.comparingInt((BlockPos bp) -> bp.getY()).reversed());
 
@@ -262,6 +269,19 @@ public class WorldPowerEvents {
             level.destroyBlock(bp, true);
             broken++;
         }
+        return broken > 0;
+    }
+
+    private static boolean retryFromAbove(
+        ServerLevel level,
+        BlockPos origin,
+        BlockState originState,
+        int maxBlocks,
+        BlockPos excludedLog
+    ) {
+        BlockPos above = origin.above();
+        if (!isSameNaturalTreeLog(level, above, originState)) return false;
+        return fellTree(level, above, originState, maxBlocks, excludedLog);
     }
 
     private static Set<BlockPos> collectConnectedTreeLogs(
@@ -359,13 +379,16 @@ public class WorldPowerEvents {
 
     private static Set<BlockPos> collectNaturalLeaves(ServerLevel level, BlockPos origin, Set<BlockPos> logs) {
         Set<BlockPos> leaves = new HashSet<>();
+        int canopyLogMinY = minY(logs) + MIN_TREE_VERTICAL_RUN - 1;
 
         for (BlockPos log : logs) {
+            if (log.getY() < canopyLogMinY) continue;
             for (int dx = -LEAF_SEARCH_RADIUS; dx <= LEAF_SEARCH_RADIUS; dx++) {
                 for (int dy = -LEAF_SEARCH_RADIUS; dy <= LEAF_SEARCH_RADIUS; dy++) {
                     for (int dz = -LEAF_SEARCH_RADIUS; dz <= LEAF_SEARCH_RADIUS; dz++) {
                         BlockPos candidate = log.offset(dx, dy, dz).immutable();
-                        if (!isInsideTreeScan(origin, candidate) || !isNaturalLeaf(level.getBlockState(candidate))) {
+                        if (!isInsideTreeScan(origin, candidate)
+                            || !isNaturalLeaf(level.getBlockState(candidate))) {
                             continue;
                         }
                         leaves.add(candidate);
@@ -375,6 +398,14 @@ public class WorldPowerEvents {
         }
 
         return leaves;
+    }
+
+    private static int minY(Set<BlockPos> positions) {
+        int min = Integer.MAX_VALUE;
+        for (BlockPos pos : positions) {
+            min = Math.min(min, pos.getY());
+        }
+        return min == Integer.MAX_VALUE ? 0 : min;
     }
 
     private static void addPathToOrigin(
@@ -453,10 +484,14 @@ public class WorldPowerEvents {
      */
     @SubscribeEvent
     public static void onPlayerPlaceLog(BlockEvent.EntityPlaceEvent event) {
-        if (!(event.getEntity() instanceof net.minecraft.world.entity.player.Player)) return;
+        if (!(event.getEntity() instanceof net.minecraft.world.entity.player.Player player)) return;
         if (event.getLevel().isClientSide()) return;
         BlockState placed = event.getPlacedBlock();
         if (!placed.is(BlockTags.LOGS) || isStrippedBlock(placed)) return;
+        if (Block.byItem(player.getMainHandItem().getItem()) != placed.getBlock()
+            && Block.byItem(player.getOffhandItem().getItem()) != placed.getBlock()) {
+            return;
+        }
         // EntityPlaceEvent's level is a LevelAccessor on both branches; cast
         // is safe at this dispatch site (player placement always happens on
         // a real Level, never a ProtoChunk).
