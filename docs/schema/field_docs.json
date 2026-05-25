@@ -212,7 +212,8 @@
     "threshold": "Health fraction below which the effects activate (0.5 = 50%; default 0.5)."
   },
   "neoorigins:mobs_ignore_player": {
-    "entity_types": "Entity ids or #tags of mobs that never aggro or target this player."
+    "entity_types": "Entity ids or #tags of mobs that never aggro or target this player. Empty/omitted = matches every mob.",
+    "passive": "When true, the ignore is unconditional — even hitting the mob does not provoke retaliation. Default false (the mob may target back briefly after being hit)."
   },
   "neoorigins:model_color": {
     "alpha": "Player model tint opacity, 0.0 transparent to 1.0 opaque (default 1.0).",
@@ -245,7 +246,7 @@
   },
   "neoorigins:no_mob_spawns_nearby": {
     "categories": "Mob groups blocked: monster, creature, ambient, water_creature, or all (default monster).",
-    "radius": "Block radius around the player where natural spawning is suppressed (default 48)."
+    "radius": "Block radius around the player where natural spawning is suppressed (default 24). Vanilla already blocks MONSTER-category natural spawns within 24 blocks of any player, so use a value above 24 to extend the safe zone meaningfully."
   },
   "neoorigins:no_slowdown": {
     "block_tag": "Block tag to limit slowdown immunity to; omit for immunity to all slowdown."
@@ -394,6 +395,15 @@
     "hunger_cost": "Hunger consumed each time a mob is tamed.",
     "max_tamed": "Max tamed mobs alive at once before taming is blocked.",
     "range": "Max distance in blocks to raycast for the mob to tame (default 16)."
+  },
+  "neoorigins:mount": {
+    "range": "Max distance in blocks to raycast for the entity to mount (default 5).",
+    "cooldown_ticks": "Ticks before the mount ability can be reused (100 = 5s).",
+    "hunger_cost": "Hunger consumed each time an entity is mounted.",
+    "allow_players": "Whether this power can mount other players (default true).",
+    "allow_mobs": "Whether this power can mount mobs (default true).",
+    "block_bosses": "Prevent mounting boss mobs like the Ender Dragon or Wither (default true).",
+    "mount_position": "Where the rider sits: 'centered' (on top) or 'shoulder' (offset to one side)."
   },
   "neoorigins:tamed_animal_boost": {
     "health_bonus": "Flat max-health added to your tamed animals (half-hearts; default 4).",

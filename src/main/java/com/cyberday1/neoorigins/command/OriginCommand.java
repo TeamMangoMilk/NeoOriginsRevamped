@@ -9,6 +9,7 @@ import com.cyberday1.neoorigins.data.MobOriginDataManager;
 import com.cyberday1.neoorigins.data.OriginDataManager;
 import com.cyberday1.neoorigins.data.PowerDataManager;
 import com.cyberday1.neoorigins.evolution.EssenceEvolutionManager;
+import com.cyberday1.neoorigins.service.MountConsentManager;
 import com.cyberday1.neoorigins.network.NeoOriginsNetwork;
 import com.cyberday1.neoorigins.service.ActiveOriginService;
 import com.cyberday1.neoorigins.service.MobOriginService;
@@ -87,6 +88,14 @@ public class OriginCommand {
                     .requires(cs -> cs.hasPermission(2))
                     .then(Commands.argument("player", EntityArgument.player())
                         .executes(OriginCommand::executeEvolveQuery))))
+            // ── Mount consent commands (permission 0) ─────────────────
+            .then(Commands.literal("mount")
+                // /neoorigins mount accept — accept a pending mount request
+                .then(Commands.literal("accept")
+                    .executes(OriginCommand::executeMountAccept))
+                // /neoorigins mount decline — decline a pending mount request
+                .then(Commands.literal("decline")
+                    .executes(OriginCommand::executeMountDecline)))
             // ── Admin commands (permission 2) ──────────────────────────
             .then(Commands.literal("get")
                 // OPs always; other players only when public_origin_get is on.
@@ -182,6 +191,20 @@ public class OriginCommand {
         return 1;
     }
 
+    // ── Mount consent commands ──────────────────────────────────────────
+
+    private static int executeMountAccept(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        ServerPlayer player = ctx.getSource().getPlayerOrException();
+        MountConsentManager.acceptRequest(player);
+        return 1;
+    }
+
+    private static int executeMountDecline(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        ServerPlayer player = ctx.getSource().getPlayerOrException();
+        MountConsentManager.declineRequest(player);
+        return 1;
+    }
+
     /**
      * /neoorigins evolve &lt;player&gt; &lt;tier&gt;
      * Datapack/admin command to force-set a player's evolution tier.
@@ -199,8 +222,13 @@ public class OriginCommand {
         }
 
         PlayerOriginData data = player.getData(OriginAttachments.originData());
+        int oldTier = data.getEvolutionTier();
         data.setEvolutionTier(tier);
         NeoOriginsNetwork.syncEvolutionToPlayer(player);
+        if (oldTier != tier) {
+            com.cyberday1.neoorigins.compat.kubejs.KubeJSEventBridge.fireEvolutionTierChanged(
+                player, oldTier, tier);
+        }
 
         String tierName = tier > 0 ? EssenceEvolutionManager.TIER_NAMES[tier] : "Base";
         ctx.getSource().sendSuccess(() -> Component.literal(

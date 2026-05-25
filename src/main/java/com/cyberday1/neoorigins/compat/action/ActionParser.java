@@ -53,12 +53,12 @@ public final class ActionParser {
         "neoorigins:play_sound", "neoorigins:pull_entities", "neoorigins:random_teleport",
         "neoorigins:raycast", "neoorigins:remove_from_set", "neoorigins:revoke_power",
         "neoorigins:set_block", "neoorigins:set_fall_distance", "neoorigins:set_on_fire",
-        "neoorigins:spawn_black_hole", "neoorigins:spawn_effect_cloud",
+        "neoorigins:set_resource", "neoorigins:spawn_black_hole", "neoorigins:spawn_effect_cloud",
         "neoorigins:spawn_entity", "neoorigins:spawn_lingering_area",
         "neoorigins:spawn_projectile", "neoorigins:spawn_tornado",
         "neoorigins:swap_with_entity", "neoorigins:swing_hand", "neoorigins:target_action",
         "neoorigins:teleport_to_marker", "neoorigins:throw_target", "neoorigins:toggle",
-        "neoorigins:trigger_cooldown");
+        "neoorigins:trigger_cooldown", "neoorigins:kubejs_callback");
 
     public static EntityAction parse(JsonObject json, String contextId) {
         if (json == null) {
@@ -93,6 +93,7 @@ public final class ActionParser {
                 case "neoorigins:exhaust"                       -> parseExhaust(json);
                 case "neoorigins:change_resource",
                      "neoorigins:modify_resource"               -> parseChangeResource(json);
+                case "neoorigins:set_resource"                  -> parseSetResource(json);
                 case "neoorigins:nothing"                       -> EntityAction.noop();
 
                 // ---- Phase 2: New actions ----
@@ -171,6 +172,12 @@ public final class ActionParser {
                     (id, inv, p) -> new net.minecraft.world.inventory.CraftingMenu(id, inv, net.minecraft.world.inventory.ContainerLevelAccess.create(p.level(), p.blockPosition())),
                     net.minecraft.network.chat.Component.translatable("container.crafting")));
                 case "neoorigins:invert"                        -> EntityAction.noop(); // no-op: modifier inversion has no entity-action equivalent
+
+                // ---- KubeJS bridge ----
+                // Soft dep: when KubeJS is absent, no callback can be registered,
+                // so invoke() silently no-ops. Pack authors register callbacks
+                // from JS via NeoOrigins.registerCallback(id, fn).
+                case "neoorigins:kubejs_callback"               -> parseKubeJSCallback(json, contextId);
 
                 default -> failNoop(type, contextId, "unsupported action type");
             };
@@ -798,6 +805,15 @@ public final class ActionParser {
                 player.getData(CompatAttachments.resourceState()).clampedAdd(key, change, lo, hi);
             };
         };
+    }
+
+    private static EntityAction parseSetResource(JsonObject json) {
+        String resourceId = json.has("resource") ? json.get("resource").getAsString() : null;
+        if (resourceId == null) return EntityAction.noop();
+        int value = json.has("value") ? json.get("value").getAsInt()
+                   : json.has("change") ? json.get("change").getAsInt() : 0;
+        final String key = resourceId;
+        return player -> player.getData(CompatAttachments.resourceState()).set(key, value);
     }
 
     // ---- Phase 2: New action parsers ----
@@ -1627,6 +1643,14 @@ public final class ActionParser {
     }
 
     /** Cancel the current dispatch if its context is an ICancellableEvent. */
+    private static EntityAction parseKubeJSCallback(JsonObject json, String contextId) {
+        if (!json.has("id")) {
+            return failNoop("neoorigins:kubejs_callback", contextId, "missing 'id'");
+        }
+        String id = json.get("id").getAsString();
+        return player -> com.cyberday1.neoorigins.compat.kubejs.KubeJSCallbacks.invoke(id, player);
+    }
+
     private static EntityAction parseCancelEvent() {
         return player -> {
             Object ctx = com.cyberday1.neoorigins.service.ActionContextHolder.get();
@@ -1907,8 +1931,8 @@ public final class ActionParser {
     }
 
     private static EntityAction failNoop(String type, String contextId, String detail) {
-        NeoOrigins.LOGGER.warn("[CompatB] action '{}' in {} defaulted to no-op: {}",
-            type, contextId, detail);
+        com.cyberday1.neoorigins.compat.CompatWarningCollector
+            .recordUnsupportedAction(type, contextId, detail);
         final String finalType = type;
         final String finalContextId = contextId;
         return player -> {

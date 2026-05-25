@@ -20,7 +20,9 @@
     "EntityIgnoreWaterMixin",
     "LivingEntityWalkOnFluidMixin",
     "PlayerPhaseOverrideMixin",
-    "LivingEntityUndeadPotionMixin"
+    "LivingEntityUndeadPotionMixin",
+    "EntityMountPositionMixin",
+    "EntityMountEndMixin"
   ],
   "client": [
     "client.LightTextureMixin",

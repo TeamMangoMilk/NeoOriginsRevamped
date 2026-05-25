@@ -168,6 +168,31 @@ public final class ActiveOriginService {
         }
     }
 
+    /**
+     * Like {@link #forEachOfType}, but skips holders whose type extends
+     * {@link com.cyberday1.neoorigins.power.builtin.base.AbstractTogglePower}
+     * and is currently toggled off for this player.
+     *
+     * <p>Event handlers (e.g. spawn cancellation, hit modifiers) reading
+     * toggleable powers must use this variant — only {@code onTick} honors the
+     * toggle automatically; everywhere else has to gate itself. Without this,
+     * the player toggles "off", the keybind says "Power disabled", but the
+     * event handler keeps applying the effect.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public static <C extends PowerConfiguration, T extends PowerType<C>>
+    void forEachOfTypeActive(ServerPlayer player, Class<T> typeClass, Consumer<C> action) {
+        for (PowerHolder<?> holder : getOrBuild(player).allPowers) {
+            if (!typeClass.isInstance(holder.type())) continue;
+            if (holder.type() instanceof com.cyberday1.neoorigins.power.builtin.base.AbstractTogglePower<?>
+                    && ((com.cyberday1.neoorigins.power.builtin.base.AbstractTogglePower) holder.type())
+                            .isToggledOff(player, holder.config())) {
+                continue;
+            }
+            action.accept((C) holder.config());
+        }
+    }
+
     /** Returns true if the player has a power of the given type satisfying the predicate. */
     @SuppressWarnings("unchecked")
     public static <C extends PowerConfiguration, T extends PowerType<C>>
@@ -294,6 +319,7 @@ public final class ActiveOriginService {
                         NeoForge.EVENT_BUS.post(new PowerRevokedEvent(player, powerId));
                         com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
                             player, com.cyberday1.neoorigins.service.EventPowerIndex.Event.LOST, powerId);
+                        com.cyberday1.neoorigins.compat.kubejs.KubeJSEventBridge.firePowerRevoked(player, powerId);
                     }
                 }
             }
@@ -308,12 +334,20 @@ public final class ActiveOriginService {
                         NeoForge.EVENT_BUS.post(new PowerGrantedEvent(player, powerId));
                         com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
                             player, com.cyberday1.neoorigins.service.EventPowerIndex.Event.GAINED, powerId);
+                        com.cyberday1.neoorigins.compat.kubejs.KubeJSEventBridge.firePowerGranted(player, powerId);
                     }
                 }
             }
         }
         // Rebuild managed attribute modifiers after the layer map changes.
         reconcileAttributeModifiers(player);
+        // KubeJS: centralized origin_changed fire - covers user picks, admin
+        // /set, /reset, and cascade invalidation. Fires whenever the layer's
+        // origin id transitions, including null <-> value (first-pick / clear).
+        if (!java.util.Objects.equals(oldOriginId, newOriginId)) {
+            com.cyberday1.neoorigins.compat.kubejs.KubeJSEventBridge.fireOriginChanged(
+                player, layerId, oldOriginId, newOriginId);
+        }
     }
 
     private static List<ResourceLocation> powersForLayer(PlayerOriginData data, ResourceLocation layerId, Origin origin) {

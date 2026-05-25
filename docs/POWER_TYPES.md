@@ -1101,19 +1101,33 @@ Ignites the player when their HP drops below a percentage of their maximum healt
 
 ## `neoorigins:mobs_ignore_player`
 
-Causes specific mob types to passively ignore the player unless provoked.
+Causes specific mob types to ignore the player. By default a retaliation
+window applies — once the player hits the mob, the mob may target back
+briefly. Set `passive: true` to make the ignore unconditional.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `entity_types` | list of Identifier | no | `[]` | Entity types that will ignore the player. When empty, all hostile mobs ignore. |
+| `entity_types` | list of Identifier or `#tag` | no | `[]` | Entity types that will ignore the player. Accepts raw ids (`"minecraft:zombie"`) and tag references (`"#minecraft:skeletons"`). When empty, every mob ignores. |
+| `passive` | bool | no | `false` | When true, the ignore is unconditional — even attacking the mob does not provoke retaliation. |
 
-**Example — only creepers ignore:**
+**Example — only creepers ignore (with retaliation):**
 ```json
 {
   "type": "neoorigins:mobs_ignore_player",
   "entity_types": ["minecraft:creeper"],
   "name": "Creeper Affinity",
   "description": "Creepers ignore you unless attacked."
+}
+```
+
+**Example — unprovokable peace with every skeleton (tag + passive):**
+```json
+{
+  "type": "neoorigins:mobs_ignore_player",
+  "entity_types": ["#minecraft:skeletons"],
+  "passive": true,
+  "name": "Bonewalker",
+  "description": "Skeletons never see you as a threat, no matter what you do."
 }
 ```
 
@@ -1127,17 +1141,17 @@ Suppresses mob spawns within a radius of the player. Toggleable — the player c
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `radius` | int | no | `48` | Radius in blocks within which spawns are suppressed |
+| `radius` | int | no | `24` | Radius in blocks within which spawns are suppressed. Note: vanilla already blocks `MONSTER`-category natural spawns within 24 blocks of any player (`NaturalSpawner`); use a value above 24 to extend the safe zone meaningfully. |
 | `categories` | list of string | no | `["monster"]` | Spawn categories to suppress: `monster`, `creature`, `ambient`, `water_creature`, or `all` |
 
-**Example — suppress hostile spawns in a 48-block radius:**
+**Example — suppress hostile spawns in a 36-block radius:**
 ```json
 {
   "type": "neoorigins:no_mob_spawns_nearby",
-  "radius": 48,
+  "radius": 36,
   "categories": ["monster"],
   "name": "Warding Presence",
-  "description": "Hostile mobs don't spawn within 48 blocks. Toggle with skill key."
+  "description": "Hostile mobs don't spawn within 36 blocks. Toggle with skill key."
 }
 ```
 
