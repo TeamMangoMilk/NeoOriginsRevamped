@@ -1,0 +1,9 @@
+{
+  "type": "neoorigins:model_color",
+  "red": 1.0,
+  "green": 1.0,
+  "blue": 1.0,
+  "alpha": 0.55,
+  "name": "power.neoorigins.phantom_translucent.name",
+  "description": "power.neoorigins.phantom_translucent.description"
+}

@@ -20,6 +20,10 @@ public abstract class AbstractTogglePower<C extends PowerConfiguration> extends 
         boolean wasOff = data.isPowerToggledOff(key);
 
         if (wasOff) {
+            if (!canToggleOn(player, config)) {
+                onToggleOnRejected(player, config);
+                return;
+            }
             data.setPowerToggledOff(key, false);
             player.sendSystemMessage(Component.translatable("neoorigins.toggle.on")
                 .withStyle(ChatFormatting.GREEN));
@@ -38,6 +42,13 @@ public abstract class AbstractTogglePower<C extends PowerConfiguration> extends 
     }
 
     @Override
+    public void onGranted(ServerPlayer player, C config) {
+        if (defaultToggledOff(config)) {
+            player.getData(OriginAttachments.originData()).setPowerToggledOff(getToggleKey(config), true);
+        }
+    }
+
+    @Override
     public void onRevoked(ServerPlayer player, C config) {
         PlayerOriginData data = player.getData(OriginAttachments.originData());
         data.setPowerToggledOff(getToggleKey(config), false);
@@ -46,6 +57,16 @@ public abstract class AbstractTogglePower<C extends PowerConfiguration> extends 
 
     protected abstract void tickEffect(ServerPlayer player, C config);
     protected abstract void removeEffect(ServerPlayer player, C config);
+
+    protected boolean defaultToggledOff(C config) {
+        return false;
+    }
+
+    protected boolean canToggleOn(ServerPlayer player, C config) {
+        return true;
+    }
+
+    protected void onToggleOnRejected(ServerPlayer player, C config) {}
 
     public boolean isToggledOff(ServerPlayer player, C config) {
         PlayerOriginData data = player.getData(OriginAttachments.originData());

@@ -55,7 +55,7 @@ public final class NeoOriginsConfig {
 
     private static final String[] BUILT_IN_ORIGINS = {
         "human", "merling", "avian", "blazeling", "elytrian", "enderian",
-        "arachnid", "shulk", "phantom", "feline", "golem", "caveborn",
+        "arachnid", "shulk", "phantom", "specter", "feline", "golem", "caveborn",
         "sylvan", "draconic", "revenant", "tiny", "abyssal", "voidwalker",
         "stoneguard", "verdant", "umbral", "inchling", "sporeling",
         "frostborn", "strider", "siren", "piglin", "hiveling", "cinderborn",
@@ -305,7 +305,24 @@ public final class NeoOriginsConfig {
         p("necromancer_daylight_damage");f("damage_per_second", 1.5, 0, 100); ep();
 
         // ── Phantom ──
-        p("phantom_form");              fb("invisibility", true); fb("no_gravity", true); ep();
+        p("phantom_form");              fb("invisibility", true); fb("no_gravity", true); fb("default_off", true); fi("min_food_level", 6, 0, 20); ep();
+        p("phantom_translucent");       f("alpha", 0.55, 0, 1); ep();
+        p("phantom_burn_in_daylight");  f("damage_per_second", 1.0, 0, 100); fb("ignite", true); ep();
+        p("phantom_hunger_over_time");  f("exhaustion_per_tick", 0.005, 0, 10); ep();
+        p("phantom_fragile");           f("amount", -6.0, -100, 100); ep();
+
+        // Specter
+        p("specter_elytra_boost");      f("strength", 1.5, 0, 10); fi("cooldown_ticks", 40, 0, 72000); ep();
+        p("specter_moon_armor");        fi("amplifier", 0, 0, 4); ep();
+        p("specter_soul_drain");        f("heal_amount", 2.0, 0, 100); ep();
+        p("specter_sunburn");           f("damage_per_second", 1.5, 0, 100); fb("ignite", true); ep();
+        p("specter_fragile");           f("amount", -4.0, -100, 100); ep();
+        p("specter_evolved_hp");        f("amount", 2.0, -100, 100); ep();
+        p("specter_ascended_hp");       f("amount", 4.0, -100, 100); ep();
+        p("specter_ascended_speed");    f("amount", 0.1, -1, 10); ep();
+        p("specter_apex_hp");           f("amount", 6.0, -100, 100); ep();
+        p("specter_apex_daylight");     f("damage_per_second", 1.0, 0, 100); fb("ignite", true); ep();
+        p("specter_apex_spectral_dodge");f("chance", 0.1, 0, 1); ep();
 
         // ── Piglin ──
         p("piglin_attack_bonus");       f("amount", 2.0, -100, 100); ep();

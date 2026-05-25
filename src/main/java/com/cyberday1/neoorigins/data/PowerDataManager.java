@@ -209,6 +209,9 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
         for (var entry : overrides.entrySet()) {
             String field = entry.getKey();
             Object value = entry.getValue();
+            if (applyNestedOverride(json, field, value)) {
+                continue;
+            }
             if (value instanceof Number n) {
                 json.addProperty(field, n);
             } else if (value instanceof Boolean b) {
@@ -219,6 +222,51 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
         }
         NeoOrigins.LOGGER.info("Applied {} config override(s) to power {}: {}",
             overrides.size(), id, overrides);
+    }
+
+    private static boolean applyNestedOverride(JsonObject json, String field, Object value) {
+        return switch (field) {
+            case "damage_per_second" -> setFirstActionNumber(json, "neoorigins:damage", "amount", value);
+            case "heal_amount" -> setFirstActionNumber(json, "neoorigins:heal", "amount", value);
+            case "exhaustion_per_tick" -> setFirstActionNumber(json, "neoorigins:exhaust", "amount", value);
+            case "ignite" -> setIgnite(json, value);
+            default -> false;
+        };
+    }
+
+    private static boolean setFirstActionNumber(JsonObject json, String actionType, String field, Object value) {
+        if (!(value instanceof Number n)) return false;
+        JsonObject action = findFirstAction(json.get("entity_action"), actionType);
+        if (action == null) return false;
+        action.addProperty(field, n);
+        return true;
+    }
+
+    private static boolean setIgnite(JsonObject json, Object value) {
+        if (!(value instanceof Boolean ignite)) return false;
+        JsonObject action = findFirstAction(json.get("entity_action"), "neoorigins:set_on_fire");
+        if (action == null) return false;
+        if (ignite) {
+            if (!action.has("ticks")) action.addProperty("ticks", 40);
+        } else {
+            action.addProperty("type", "neoorigins:nothing");
+            action.remove("ticks");
+        }
+        return true;
+    }
+
+    private static JsonObject findFirstAction(JsonElement element, String actionType) {
+        if (element == null || !element.isJsonObject()) return null;
+        JsonObject obj = element.getAsJsonObject();
+        String type = obj.has("type") ? obj.get("type").getAsString() : "";
+        if (actionType.equals(type)) return obj;
+        if (obj.has("actions") && obj.get("actions").isJsonArray()) {
+            for (JsonElement child : obj.getAsJsonArray("actions")) {
+                JsonObject found = findFirstAction(child, actionType);
+                if (found != null) return found;
+            }
+        }
+        return null;
     }
 
     private static Component extractComponentField(JsonObject json, String field) {

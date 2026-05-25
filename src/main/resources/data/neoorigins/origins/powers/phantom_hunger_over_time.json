@@ -1,0 +1,8 @@
+{
+  "type": "neoorigins:condition_passive",
+  "condition": { "type": "neoorigins:power_active", "power": "neoorigins:phantom_form" },
+  "entity_action": { "type": "neoorigins:exhaust", "amount": 0.005 },
+  "interval": 1,
+  "name": "power.neoorigins.phantom_hunger_over_time.name",
+  "description": "power.neoorigins.phantom_hunger_over_time.description"
+}
