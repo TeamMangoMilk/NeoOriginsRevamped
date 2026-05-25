@@ -25,6 +25,8 @@ public final class NeoOriginsConfigScreen {
     private NeoOriginsConfigScreen() {}
 
     public static void register(ModContainer modContainer) {
-        modContainer.registerExtensionPoint(IConfigScreenFactory.class, ConfigurationScreen::new);
+        modContainer.registerExtensionPoint(IConfigScreenFactory.class,
+            (mc, parent) -> new ConfigurationScreen(modContainer, parent,
+                NeoOriginsConfigSectionScreen::new));
     }
 }

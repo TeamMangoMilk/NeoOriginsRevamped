@@ -4,6 +4,8 @@ import com.cyberday1.neoorigins.power.builtin.base.AbstractActivePower;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.phys.Vec3;
 
 /** Gives a firework-rocket-like speed burst while elytra gliding. */
@@ -35,6 +37,8 @@ public class ElytraBoostPower extends AbstractActivePower<ElytraBoostPower.Confi
         );
         player.setDeltaMovement(motion.add(boost.scale(config.strength())));
         player.hurtMarked = true; // sync velocity to client
+        player.level().playSound(null, player.getX(), player.getY(), player.getZ(),
+            SoundEvents.BREEZE_CHARGE, SoundSource.PLAYERS, 0.8F, 1.2F);
         return true;
     }
 }

@@ -64,6 +64,11 @@ public class NeoOrigins {
         // Register TOML config (config/neoorigins-common.toml)
         modContainer.registerConfig(ModConfig.Type.COMMON, NeoOriginsConfig.SPEC);
 
+        if (FMLEnvironment.dist == Dist.CLIENT) {
+            modContainer.registerConfig(ModConfig.Type.CLIENT,
+                com.cyberday1.neoorigins.client.NeoOriginsClientConfig.SPEC);
+        }
+
         // Wire the auto-generated NeoForge config screen into the mod menu's
         // "Config" button. ConfigurationScreen + IConfigScreenFactory are
         // client-only types — load through a client-package trampoline so the

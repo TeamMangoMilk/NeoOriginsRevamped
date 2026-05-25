@@ -30,6 +30,7 @@ public class NeoOriginsClientEvents {
     public static void onClientPlayerTick(PlayerTickEvent.Pre event) {
         if (!(event.getEntity() instanceof LocalPlayer player)) return;
         ClientCooldownState.tick();
+        NeoOriginsElytraSoundController.tick(player);
 
         if (NeoOriginsKeybindings.SKILL_1.consumeClick()) PacketDistributor.sendToServer(new ActivatePowerPayload(0));
         if (NeoOriginsKeybindings.SKILL_2.consumeClick()) PacketDistributor.sendToServer(new ActivatePowerPayload(1));

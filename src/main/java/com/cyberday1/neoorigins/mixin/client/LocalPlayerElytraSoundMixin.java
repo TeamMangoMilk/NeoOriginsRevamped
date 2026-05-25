@@ -1,17 +1,16 @@
 package com.cyberday1.neoorigins.mixin.client;
 
+import com.cyberday1.neoorigins.client.NeoOriginsElytraSoundController;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.sounds.ElytraOnPlayerSoundInstance;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.client.sounds.SoundManager;
-import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.item.Items;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
 
 /**
- * Suppresses vanilla's {@code item.elytra.flying} wind sound when a player
+ * Routes vanilla's {@code item.elytra.flying} wind sound when a player
  * enters fall-flying <em>without an actual Elytra equipped</em> — i.e., the
  * gliding is being driven by a NeoOrigins flight power like
  * {@code natural_glide} (via {@code LocalPlayerNaturalGlideMixin}) or by the
@@ -24,15 +23,11 @@ import org.spongepowered.asm.mixin.injection.Redirect;
  * {@code getSoundManager().play(new ElytraOnPlayerSoundInstance(this))} —
  * never checking the chest slot. Vanilla assumed fall-flying always implies
  * a real elytra; the mod's powers legitimately break that assumption, so the
- * sound has to be gated here.
+ * sound is controlled here.
  *
  * <p>{@link Redirect} the single {@code SoundManager.play(SoundInstance)} call
- * in that method: forward as normal unless the sound is the elytra-wind
- * instance AND no Elytra is equipped, in which case drop it on the floor.
- * Real-elytra users are unaffected (the instanceof + chest-slot check is
- * mod-agnostic — no coupling to specific powers). Surgical: only fires once
- * per fall-flying transition, no per-tick cost — when suppressed, the sound
- * instance is never even created.
+ * in that method and delegate the no-elytra case to a client-side preference.
+ * Real-elytra users are unaffected.
  *
  * <p>Client-side only — listed in the {@code client} array of
  * {@code neoorigins.mixins.json} so it never loads on a dedicated server.
@@ -51,14 +46,8 @@ public abstract class LocalPlayerElytraSoundMixin {
     )
     private void neoorigins$skipElytraSoundIfNoElytra(SoundManager mgr, SoundInstance sound) {
         if (sound instanceof ElytraOnPlayerSoundInstance) {
-            LocalPlayer self = (LocalPlayer) (Object) this;
-            // Cross-version: `stack.is(Items.ELYTRA)` instead of
-            // `instanceof ElytraItem` — newer MC mappings (master/26.1) replace
-            // the ElytraItem class with component-based equipment, but the
-            // registry item Items.ELYTRA exists on both lines.
-            if (!self.getItemBySlot(EquipmentSlot.CHEST).is(Items.ELYTRA)) {
-                return; // gliding without an elytra — suppress the elytra wind
-            }
+            NeoOriginsElytraSoundController.handleFallFlyingSound((LocalPlayer) (Object) this, mgr, sound);
+            return;
         }
         mgr.play(sound);
     }

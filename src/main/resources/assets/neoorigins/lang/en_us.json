@@ -1,4 +1,8 @@
 {
+  "neoorigins.configuration.section.neoorigins.client.toml": "Client Settings",
+  "neoorigins.configuration.section.neoorigins.client.toml.title": "NeoOrigins Client Settings",
+  "neoorigins.configuration.natural_glide_elytra_sound": "Natural Glide Elytra Sound",
+  "neoorigins.configuration.natural_glide_elytra_sound.tooltip": "Play the vanilla elytra flying loop when an origin glides without wearing a real elytra. Turn this off for quieter natural glide.",
   "neoorigins.toggle.on": "Power enabled",
   "neoorigins.toggle.off": "Power disabled",
   "neoorigins.sleep.remember_spawn": "You don't need sleep \u2014 but you remember this place.",
