@@ -320,11 +320,24 @@ public class AttributeModifierPower extends PowerType<AttributeModifierPower.Con
             for (AttributeModifier m : instance.getModifiers()) {
                 ResourceLocation id = m.id();
                 if (!"neoorigins".equals(id.getNamespace())) continue;
-                if (!id.getPath().startsWith("power_")) continue;
+                if (!isManagedOriginModifier(id)) continue;
                 stale.add(id);
             }
             for (ResourceLocation id : stale) instance.removeModifier(id);
         }
+    }
+
+    private static boolean isManagedOriginModifier(ResourceLocation id) {
+        String path = id.getPath();
+        return path.startsWith("power_")
+            || path.startsWith("size_")
+            || path.equals("break_speed_combined")
+            || path.equals("ignore_water_speed")
+            || path.equals("underwater_mining_cancel_penalty")
+            || path.equals("less_item_use_slowdown")
+            || path.equals("slime_level_hp_bonus")
+            || path.equals("slime_split_hp_reduction")
+            || path.equals("slime_moisture_armor_penalty");
     }
 
     /** Resolves the attribute with prefix tolerance. 1.21.1 registers attributes

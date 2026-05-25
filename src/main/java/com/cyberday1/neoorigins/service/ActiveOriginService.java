@@ -11,6 +11,11 @@ import com.cyberday1.neoorigins.attachment.OriginAttachments;
 import com.cyberday1.neoorigins.attachment.PlayerOriginData;
 import com.cyberday1.neoorigins.data.OriginDataManager;
 import com.cyberday1.neoorigins.data.PowerDataManager;
+import com.cyberday1.neoorigins.power.builtin.AttributeModifierPower;
+import com.cyberday1.neoorigins.power.builtin.BreakSpeedModifierPower;
+import com.cyberday1.neoorigins.power.builtin.IgnoreWaterPower;
+import com.cyberday1.neoorigins.power.builtin.SizeScalingPower;
+import com.cyberday1.neoorigins.power.builtin.UnderwaterMiningSpeedPower;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
@@ -250,7 +255,7 @@ public final class ActiveOriginService {
         //      returned null at line `if (origin == null) continue;` above).
         // Cheap to run; in the common case, all targeted modifiers were already
         // removed by the loop above and this is a no-op.
-        com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(player);
+        AttributeModifierPower.purgeAllOriginModifiers(player);
         // Belt-and-suspenders: clear ALL event handlers for this player.
         // Covers the same class of leaks as purgeAllOriginModifiers — if an
         // origin's JSON was removed (null above) or a Config record equality
@@ -271,10 +276,18 @@ public final class ActiveOriginService {
      */
     public static void applyOriginPowers(ServerPlayer player, ResourceLocation layerId,
                                           ResourceLocation oldOriginId, ResourceLocation newOriginId) {
+        PlayerOriginData data = player.getData(OriginAttachments.originData());
+        ResourceLocation currentOriginId = data.getOrigin(layerId);
+        if (newOriginId == null) {
+            if (currentOriginId != null) data.removeOrigin(layerId);
+        } else if (!newOriginId.equals(currentOriginId)) {
+            data.setOrigin(layerId, newOriginId);
+        }
+
         if (oldOriginId != null) {
             Origin oldOrigin = OriginDataManager.INSTANCE.getOrigin(oldOriginId);
             if (oldOrigin != null) {
-                for (ResourceLocation powerId : oldOrigin.powers()) {
+                for (ResourceLocation powerId : powersForLayer(data, layerId, oldOrigin)) {
                     PowerHolder<?> holder = PowerDataManager.INSTANCE.getPower(powerId);
                     if (holder != null) {
                         holder.onRevoked(player);
@@ -284,23 +297,50 @@ public final class ActiveOriginService {
                     }
                 }
             }
-            // Sweep any orphaned neoorigins attribute modifiers from the old origin
-            // in case the JSON was edited or a power was removed since it was granted.
-            com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(player);
         }
-        Origin newOrigin = OriginDataManager.INSTANCE.getOrigin(newOriginId);
-        if (newOrigin != null) {
-            for (ResourceLocation powerId : newOrigin.powers()) {
-                PowerHolder<?> holder = PowerDataManager.INSTANCE.getPower(powerId);
-                if (holder != null) {
-                    holder.onGranted(player);
-                    NeoForge.EVENT_BUS.post(new PowerGrantedEvent(player, powerId));
-                    com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
-                        player, com.cyberday1.neoorigins.service.EventPowerIndex.Event.GAINED, powerId);
+        if (newOriginId != null) {
+            Origin newOrigin = OriginDataManager.INSTANCE.getOrigin(newOriginId);
+            if (newOrigin != null) {
+                for (ResourceLocation powerId : powersForLayer(data, layerId, newOrigin)) {
+                    PowerHolder<?> holder = PowerDataManager.INSTANCE.getPower(powerId);
+                    if (holder != null) {
+                        holder.onGranted(player);
+                        NeoForge.EVENT_BUS.post(new PowerGrantedEvent(player, powerId));
+                        com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
+                            player, com.cyberday1.neoorigins.service.EventPowerIndex.Event.GAINED, powerId);
+                    }
                 }
             }
         }
-        // Clamp health to the new max — attribute modifiers may have changed
+        // Rebuild managed attribute modifiers after the layer map changes.
+        reconcileAttributeModifiers(player);
+    }
+
+    private static List<ResourceLocation> powersForLayer(PlayerOriginData data, ResourceLocation layerId, Origin origin) {
+        return CLASS_LAYER.equals(layerId)
+            ? origin.powers()
+            : origin.powersForTier(data.getEvolutionTier());
+    }
+
+    /**
+     * Rebuilds player attribute modifiers from the currently selected origins.
+     * This removes stale modifiers from older origin/class choices, then replays
+     * only the attribute-affecting powers that are still active.
+     */
+    public static void reconcileAttributeModifiers(ServerPlayer player) {
+        AttributeModifierPower.purgeAllOriginModifiers(player);
+        for (PowerHolder<?> holder : getOrBuild(player).allPowers) {
+            PowerType<?> type = holder.type();
+            if (type instanceof AttributeModifierPower
+                || type instanceof BreakSpeedModifierPower
+                || type instanceof IgnoreWaterPower
+                || type instanceof SizeScalingPower
+                || type instanceof UnderwaterMiningSpeedPower) {
+                holder.onGranted(player);
+            }
+        }
+
+        // Clamp health to the new max - attribute modifiers may have changed
         // max_health (e.g. swapping from a +HP origin to one without).
         if (player.getHealth() > player.getMaxHealth()) {
             player.setHealth(player.getMaxHealth());

@@ -308,10 +308,11 @@ public class OriginCommand {
         ServerPlayer player = EntityArgument.getPlayer(ctx, "player");
         PlayerOriginData data = player.getData(OriginAttachments.originData());
 
-        ActiveOriginService.revokeAllPowers(player);
         if (layerId != null) {
-            data.removeOrigin(layerId);
+            ResourceLocation oldOrigin = data.getOrigin(layerId);
+            ActiveOriginService.applyOriginPowers(player, layerId, oldOrigin, null);
         } else {
+            ActiveOriginService.revokeAllPowers(player);
             data.clear();
         }
 

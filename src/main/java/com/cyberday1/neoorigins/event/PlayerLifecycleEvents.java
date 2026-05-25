@@ -80,6 +80,7 @@ public class PlayerLifecycleEvents {
 
         repairCorruptedVitals(sp);
 
+        com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(sp);
         ActiveOriginService.forEach(sp, holder -> holder.onLogin(sp));
 
         // Clamp health to the (possibly changed) max — catches stale health
@@ -213,6 +214,7 @@ public class PlayerLifecycleEvents {
             data.clear();
             assignRandomOrigins(sp);
         } else {
+            com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(sp);
             ActiveOriginService.forEach(sp, holder -> holder.onRespawn(sp));
             NeoOriginsNetwork.syncToPlayer(sp);
         }
