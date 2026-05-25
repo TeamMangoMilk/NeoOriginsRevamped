@@ -6,7 +6,7 @@ import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
 /**
- * When a log block is broken, BFS/DFS upward to break connected logs.
+ * When a natural tree log is broken, fells matching natural tree logs.
  * Skipped if the player is sneaking.
  * Handled via BlockEvent.BreakEvent in WorldPowerEvents.
  */

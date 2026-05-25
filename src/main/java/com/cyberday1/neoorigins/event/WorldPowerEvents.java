@@ -18,6 +18,8 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.neoforged.neoforge.common.Tags;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.entity.living.BabyEntitySpawnEvent;
@@ -30,6 +32,13 @@ import java.util.*;
 
 @EventBusSubscriber(modid = NeoOrigins.MOD_ID)
 public class WorldPowerEvents {
+    private static final int TREE_SCAN_HORIZONTAL_RADIUS = 8;
+    private static final int TREE_SCAN_DOWN = 4;
+    private static final int TREE_SCAN_UP = 48;
+    private static final int LEAF_SEARCH_RADIUS = 6;
+    private static final int BRANCH_LOG_SEARCH_RADIUS = 2;
+    private static final int DETACHED_BRANCH_MAX_LOGS = 6;
+    private static final int DETACHED_BRANCH_MAX_VERTICAL_RUN = 2;
 
     @SubscribeEvent
     public static void onLivingChangeTarget(LivingChangeTargetEvent event) {
@@ -146,6 +155,9 @@ public class WorldPowerEvents {
 
         var state = event.getState();
         BlockPos pos = event.getPos().immutable();
+        boolean isLog = state.is(BlockTags.LOGS) && !isStrippedBlock(state);
+        boolean brokenLogWasPlayerPlaced = isLog
+            && com.cyberday1.neoorigins.service.PlayerPlacedLogTracker.isPlaced(sl, pos);
 
         // CropHarvestBonusPower (GitHub #91 fix layered in here):
         //   - Stripped logs are excluded entirely. The bonus is intended for
@@ -158,14 +170,10 @@ public class WorldPowerEvents {
         //     not the Entity place path), so they still earn the bonus.
         if (ActiveOriginService.has(sp, CropHarvestBonusPower.class, c -> true)) {
             boolean isMatureCrop = state.getBlock() instanceof CropBlock cb && cb.isMaxAge(state);
-            boolean isLog = state.is(BlockTags.LOGS) && !isStrippedBlock(state);
             if (isMatureCrop || isLog) {
-                boolean playerPlaced = isLog
-                    && com.cyberday1.neoorigins.service.PlayerPlacedLogTracker.isPlaced(sl, pos);
-                if (playerPlaced) {
-                    // Player-placed log: clear the mark on break (the block is
-                    // gone, no need to keep tracking) and skip the bonus.
-                    com.cyberday1.neoorigins.service.PlayerPlacedLogTracker.clear(sl, pos);
+                if (isLog && brokenLogWasPlayerPlaced) {
+                    // Player-placed log: skip the bonus. The marker is cleared
+                    // once below after all log-related powers see the original state.
                 } else {
                     ItemStack tool = sp.getMainHandItem().copy();
                     sl.getServer().execute(() -> {
@@ -182,45 +190,219 @@ public class WorldPowerEvents {
             }
         }
 
-        // TreeFellingPower — BFS upward from broken log
-        if (state.is(BlockTags.LOGS) && !sp.isShiftKeyDown()) {
+        if (brokenLogWasPlayerPlaced) {
+            // The block is gone after this event, so the per-chunk marker should
+            // not survive even when the player has no harvest/felling powers.
+            com.cyberday1.neoorigins.service.PlayerPlacedLogTracker.clear(sl, pos);
+        }
+
+        // TreeFellingPower - fell natural trees, not arbitrary connected wood.
+        if (isLog && !brokenLogWasPlayerPlaced && !sp.isShiftKeyDown()) {
             if (ActiveOriginService.has(sp, TreeFellingPower.class, c -> true)) {
                 final int[] maxBlocks = {64};
                 ActiveOriginService.forEachOfType(sp, TreeFellingPower.class, cfg ->
                     maxBlocks[0] = Math.max(maxBlocks[0], cfg.maxBlocks()));
-                fellTree(sl, pos, maxBlocks[0]);
+                fellTree(sl, pos, state, maxBlocks[0]);
             }
         }
     }
 
-    private static void fellTree(ServerLevel level, BlockPos origin, int maxBlocks) {
-        Queue<BlockPos> queue = new LinkedList<>();
-        Set<BlockPos> visited = new HashSet<>();
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                BlockPos seed = origin.offset(dx, 1, dz);
-                if (visited.add(seed)) queue.add(seed);
-            }
-        }
-        int broken = 0;
-        while (!queue.isEmpty() && broken < maxBlocks) {
-            BlockPos bp = queue.poll();
-            BlockState state = level.getBlockState(bp);
-            if (!state.is(BlockTags.LOGS)) continue;
-            level.destroyBlock(bp, true);
-            broken++;
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    BlockPos neighbor = bp.offset(dx, 1, dz);
-                    if (visited.add(neighbor)) queue.add(neighbor);
+    private static void fellTree(ServerLevel level, BlockPos origin, BlockState originState, int maxBlocks) {
+        Map<BlockPos, BlockPos> parents = new HashMap<>();
+        int scanLimit = Math.max(maxBlocks * 4, 128);
+        Set<BlockPos> connectedLogs = collectConnectedTreeLogs(level, origin, originState, scanLimit, parents);
+        if (connectedLogs.isEmpty()) return;
+
+        Set<BlockPos> naturalLeaves = collectNaturalLeaves(level, origin, connectedLogs);
+        if (naturalLeaves.isEmpty()) return;
+
+        Set<BlockPos> logsToBreak = new HashSet<>(connectedLogs);
+        for (BlockPos leaf : naturalLeaves) {
+            for (int dx = -BRANCH_LOG_SEARCH_RADIUS; dx <= BRANCH_LOG_SEARCH_RADIUS; dx++) {
+                for (int dy = -BRANCH_LOG_SEARCH_RADIUS; dy <= BRANCH_LOG_SEARCH_RADIUS; dy++) {
+                    for (int dz = -BRANCH_LOG_SEARCH_RADIUS; dz <= BRANCH_LOG_SEARCH_RADIUS; dz++) {
+                        BlockPos candidate = leaf.offset(dx, dy, dz).immutable();
+                        if (!isInsideTreeScan(origin, candidate) || !isSameNaturalTreeLog(level, candidate, originState)) {
+                            continue;
+                        }
+                        if (connectedLogs.contains(candidate)) {
+                            addPathToOrigin(candidate, origin, parents, logsToBreak);
+                            continue;
+                        }
+
+                        Set<BlockPos> detachedBranch = collectBranchComponent(level, origin, originState, candidate);
+                        if (isValidDetachedBranch(detachedBranch, connectedLogs)) {
+                            logsToBreak.addAll(detachedBranch);
+                        }
+                    }
                 }
             }
-            BlockPos n;
-            n = bp.north(); if (visited.add(n)) queue.add(n);
-            n = bp.south(); if (visited.add(n)) queue.add(n);
-            n = bp.east();  if (visited.add(n)) queue.add(n);
-            n = bp.west();  if (visited.add(n)) queue.add(n);
         }
+        if (logsToBreak.isEmpty()) return;
+
+        logsToBreak.remove(origin);
+        List<BlockPos> ordered = new ArrayList<>(logsToBreak);
+        ordered.sort(Comparator.comparingInt((BlockPos bp) -> bp.getY()).reversed());
+
+        int broken = 0;
+        for (BlockPos bp : ordered) {
+            if (broken >= maxBlocks) break;
+            if (!isSameNaturalTreeLog(level, bp, originState)) continue;
+            level.destroyBlock(bp, true);
+            broken++;
+        }
+    }
+
+    private static Set<BlockPos> collectConnectedTreeLogs(
+        ServerLevel level,
+        BlockPos origin,
+        BlockState originState,
+        int maxScan,
+        Map<BlockPos, BlockPos> parents
+    ) {
+        Queue<BlockPos> queue = new LinkedList<>();
+        Set<BlockPos> visited = new HashSet<>();
+        Set<BlockPos> logs = new HashSet<>();
+
+        visited.add(origin);
+        queue.add(origin);
+
+        while (!queue.isEmpty() && logs.size() < maxScan) {
+            BlockPos bp = queue.poll();
+            boolean isOrigin = bp.equals(origin);
+            if (!isInsideTreeScan(origin, bp) || (!isOrigin && !isSameNaturalTreeLog(level, bp, originState))) continue;
+            logs.add(bp);
+
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        if (dx == 0 && dy == 0 && dz == 0) continue;
+                        BlockPos neighbor = bp.offset(dx, dy, dz).immutable();
+                        if (visited.contains(neighbor)
+                            || !isInsideTreeScan(origin, neighbor)
+                            || !isSameNaturalTreeLog(level, neighbor, originState)) {
+                            continue;
+                        }
+                        visited.add(neighbor);
+                        parents.put(neighbor, bp);
+                        queue.add(neighbor);
+                    }
+                }
+            }
+        }
+
+        return logs;
+    }
+
+    private static Set<BlockPos> collectBranchComponent(
+        ServerLevel level,
+        BlockPos origin,
+        BlockState originState,
+        BlockPos start
+    ) {
+        Queue<BlockPos> queue = new LinkedList<>();
+        Set<BlockPos> visited = new HashSet<>();
+        Set<BlockPos> logs = new HashSet<>();
+
+        visited.add(start);
+        queue.add(start);
+
+        while (!queue.isEmpty() && logs.size() <= DETACHED_BRANCH_MAX_LOGS) {
+            BlockPos bp = queue.poll();
+            if (!isInsideTreeScan(origin, bp) || !isSameNaturalTreeLog(level, bp, originState)) continue;
+            logs.add(bp);
+
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        if (dx == 0 && dy == 0 && dz == 0) continue;
+                        BlockPos neighbor = bp.offset(dx, dy, dz).immutable();
+                        if (visited.add(neighbor)) queue.add(neighbor);
+                    }
+                }
+            }
+        }
+
+        return logs;
+    }
+
+    private static boolean isValidDetachedBranch(Set<BlockPos> branch, Set<BlockPos> connectedLogs) {
+        if (branch.isEmpty() || branch.size() > DETACHED_BRANCH_MAX_LOGS) return false;
+        return maxVerticalRun(branch) <= DETACHED_BRANCH_MAX_VERTICAL_RUN;
+    }
+
+    private static int maxVerticalRun(Set<BlockPos> logs) {
+        int max = 0;
+        for (BlockPos start : logs) {
+            if (logs.contains(start.below())) continue;
+            int run = 0;
+            BlockPos cursor = start;
+            while (logs.contains(cursor)) {
+                run++;
+                cursor = cursor.above();
+            }
+            max = Math.max(max, run);
+        }
+        return max;
+    }
+
+    private static Set<BlockPos> collectNaturalLeaves(ServerLevel level, BlockPos origin, Set<BlockPos> logs) {
+        Set<BlockPos> leaves = new HashSet<>();
+
+        for (BlockPos log : logs) {
+            for (int dx = -LEAF_SEARCH_RADIUS; dx <= LEAF_SEARCH_RADIUS; dx++) {
+                for (int dy = -LEAF_SEARCH_RADIUS; dy <= LEAF_SEARCH_RADIUS; dy++) {
+                    for (int dz = -LEAF_SEARCH_RADIUS; dz <= LEAF_SEARCH_RADIUS; dz++) {
+                        BlockPos candidate = log.offset(dx, dy, dz).immutable();
+                        if (!isInsideTreeScan(origin, candidate) || !isNaturalLeaf(level.getBlockState(candidate))) {
+                            continue;
+                        }
+                        leaves.add(candidate);
+                    }
+                }
+            }
+        }
+
+        return leaves;
+    }
+
+    private static void addPathToOrigin(
+        BlockPos start,
+        BlockPos origin,
+        Map<BlockPos, BlockPos> parents,
+        Set<BlockPos> logsToBreak
+    ) {
+        BlockPos cursor = start;
+        while (cursor != null && !cursor.equals(origin)) {
+            logsToBreak.add(cursor);
+            cursor = parents.get(cursor);
+        }
+    }
+
+    private static boolean isSameNaturalTreeLog(ServerLevel level, BlockPos pos, BlockState originState) {
+        BlockState state = level.getBlockState(pos);
+        return state.is(BlockTags.LOGS)
+            && !isStrippedBlock(state)
+            && state.getBlock() == originState.getBlock()
+            && !com.cyberday1.neoorigins.service.PlayerPlacedLogTracker.isPlaced(level, pos);
+    }
+
+    private static boolean isNaturalLeaf(BlockState state) {
+        if (!state.is(BlockTags.LEAVES)) return false;
+
+        for (var property : state.getProperties()) {
+            if (property instanceof BooleanProperty boolProperty && "persistent".equals(property.getName())) {
+                return !state.getValue(boolProperty);
+            }
+        }
+        return false;
+    }
+
+    private static boolean isInsideTreeScan(BlockPos origin, BlockPos pos) {
+        return Math.abs(pos.getX() - origin.getX()) <= TREE_SCAN_HORIZONTAL_RADIUS
+            && Math.abs(pos.getZ() - origin.getZ()) <= TREE_SCAN_HORIZONTAL_RADIUS
+            && pos.getY() >= origin.getY() - TREE_SCAN_DOWN
+            && pos.getY() <= origin.getY() + TREE_SCAN_UP;
     }
 
     @SubscribeEvent
@@ -275,6 +457,7 @@ public class WorldPowerEvents {
      *  every vanilla stripped-log variant and most mods that follow the same
      *  naming convention. Cheap registry lookup, no allocation. */
     private static boolean isStrippedBlock(BlockState state) {
+        if (state.is(Tags.Blocks.STRIPPED_LOGS) || state.is(Tags.Blocks.STRIPPED_WOODS)) return true;
         ResourceLocation id = BuiltInRegistries.BLOCK.getKey(state.getBlock());
         return id != null && id.getPath().startsWith("stripped_");
     }
