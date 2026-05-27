@@ -5,6 +5,156 @@
 
 ---
 
+## v2.1.5
+
+### Bug Fixes
+
+- **Cook crafted/smelted food spiraled to absurd saturation values.**
+  `rebuildFood` was calling `FoodProperties.Builder#saturationModifier(float)`
+  with what it thought was an absolute saturation value, but that
+  setter stores a *multiplier* — `build()` then ran it through
+  `FoodConstants.saturationByModifier(nutrition, modifier)` which
+  returns `nutrition * modifier * 2.0`. Each Cook (and Smoking Expert)
+  pass fed the previous already-blown-up saturation back through the
+  multiplier; Mollan reported cooked steak coming out with 2639
+  saturation. The helper now constructs the `FoodProperties` record
+  directly so the `saturation` parameter remains a literal absolute
+  value, matching Apoli/Origins semantics. On 26.1 the rebuild also
+  drops `eatSeconds`/`usingConvertsTo`/`effects` overrides — those
+  moved out of `FoodProperties` to the `Consumable` data component
+  in 26.1, and leaving the original `Consumable` untouched on the
+  stack is the correct preservation path. Resolves GitHub #95.
+
+- **Voidwalker (and other Route B resource bars) vanished on relog,
+  blocking abilities that gate on `cur > 0`.** `f1c492fe` already
+  fixed `onLogin` so it no longer reset the stored value back to
+  `start_value` — but two residual problems remained:
+  (1) On 1.21.1 the `RESOURCE_STATE` attachment was missing
+  `.copyOnDeath()`, so any respawn wiped the saved value entirely
+  (master had it; 2.1 didn't).
+  (2) `onLogin` re-registered the resource *meta* but didn't seed the
+  *state* entry when none existed, so `syncResourcesToClient`
+  iterates `state.getAll()` and skipped the bar entirely — symptom
+  was "energy bar disappeared, abilities won't fire because cur=0".
+  Added `.copyOnDeath()` to the 1.21.1 attachment and a state-seed
+  step in `ResourcePower#onLogin` that writes `start_value` only when
+  no entry is present (existing values are preserved). Resolves
+  GitHub #90.
+
+- **`tamed_animal_boost` granted a permanent attribute modifier that
+  outlived the source mob.** The boost modifier was applied once on
+  tame and never cleaned up, so once a player tamed enough mobs they
+  effectively kept the stacked bonus forever — even after every
+  tamed mob died or despawned. The modifier is now recomputed each
+  tick against the current owned-mob count and removed when that
+  count drops to zero.
+
+- **`persistent_effect` `show_icon` / `show_particles` / `ambient`
+  were ignored when set at the power root.** Pack authors writing
+  the convenience top-level form `{ "type":
+  "neoorigins:persistent_effect", "effect": "...", "show_icon":
+  false }` got the HUD icon anyway, because those fields were only
+  read off each `EffectSpec` and the root-level values were dropped.
+  Top-level `show_icon`, `show_particles`, and `ambient` now cascade
+  as defaults onto every nested `EffectSpec` that doesn't declare
+  its own value.
+
+- **`tame_mob` couldn't tame non-hostile mobs.** The target check
+  required `Enemy`, so packs that wanted a generalized "tame any
+  creature" power (animals, golems, villagers) had no JSON knob.
+  Added `hostile_only` (default `true`, preserving the existing
+  Monster Tamer feel); set `hostile_only: false` to allow taming
+  any non-player `Mob`. Boss rejection via `canUsePortal` is
+  unchanged.
+
+- **`breath_in_fluid`'s only drain knob (`drain_rate`) read as
+  "speed" but was actually "ticks between decrements", confusing
+  pack authors.** Added two more intuitive aliases:
+  `air_loss_per_second` (higher = faster drain, internally converted
+  to `20 / value` ticks) and `drain_interval_ticks` (the literal
+  meaning of the original field). Resolution priority is
+  `air_loss_per_second` > `drain_interval_ticks` > `drain_rate` >
+  default `20`. Existing packs using `drain_rate` keep working
+  unchanged.
+
+---
+
+## v2.1.4
+
+### Bug Fixes
+
+- **`origins:exhaust` drained hunger ~268× the intended amount.** The
+  legacy compat translator routed `origins:exhaust` to a Route A food
+  modifier with `op: "set"`, and `ModifyFoodRegistry` re-applies that
+  modifier on every food refill — so each bite of food re-stamped the
+  exhaustion value instead of ticking it once per interval. Moved to
+  Route B (`parseExhaust`): ticks `player.causeFoodExhaustion(amount)`
+  on a hashed offset of the configured `interval` so the cost lands
+  exactly once per period regardless of food intake. `condition` block
+  honored. Accepts both `exhaustion` and `amount` for the field name.
+- **`effect_immunity` ids without a namespace silently mismatched the
+  effect registry.** Pack authors writing `"wither"` (Apoli-style
+  unqualified id) didn't equal `MobEffect`'s registered
+  `"minecraft:wither"`, so the immunity check looked up the wrong key
+  and the player still took the effect. `translateEffectImmunity` now
+  routes every id through a `canonicalizeEffectId` helper that prepends
+  `minecraft:` when the namespace is missing.
+- **`origins:self_action_when_hit` ignored `bientity_action`, `cooldown`,
+  and `condition`.** The Route B parser only parsed `entity_action`,
+  so packs porting Apoli's `bientity_action` shape (where the action
+  needs the attacker reference) silently lost their behavior, and the
+  cooldown/condition gates were dropped. New
+  `BiEntityAction` + `BiEntityActionParser` covers `damage`,
+  `add_velocity`, `apply_mob_effect`, `set_on_fire`, and `invert`.
+  `parseSelfActionWhenHit` now wires cooldown + condition;
+  `CombatPowerEvents` publishes the active `HitTakenContext` to
+  `ActionContextHolder` around the `onHit` dispatch so the bi-entity
+  lambda can resolve `target = source.getEntity()` without re-traversing
+  the event.
+- **`origins:modify_jump`'s `entity_action` was parsed but never fired.**
+  The field was read into a local variable and immediately thrown
+  away — so Apoli-style jump-velocity boosts, "explode on jump", or
+  any other configured action silently no-op'd, leaving the power as
+  a plain attribute modifier. New `JumpActionRegistry` stores the
+  parsed action on grant; `JumpEventHandler` fires it from
+  `LivingJumpEvent` (server players only). Cleaned up on logout and
+  on power revoke.
+- **`origins:recipe` couldn't carry an inline recipe body** (1.21.1 only).
+  Pack authors had to ship a separate `data/<ns>/recipe/...json` file
+  even when the recipe was Origins-specific and only used by one
+  power. `parseRecipe` now also accepts an inline JSON object in
+  the `recipe` field; `InlineRecipeRegistry` collects pending bodies
+  during the datapack reload and injects them via
+  `RecipeManager#replaceRecipes` on `OnDatapackSyncEvent`. Caveat:
+  the resulting recipe is globally craftable — the inline form only
+  controls recipe-book visibility, not the craft gate. The 26.1 jar
+  doesn't ship this: `RecipeManager` on 26.1 stores recipes in an
+  immutable `RecipeMap` with no `replaceRecipes` hook, so inline
+  bodies log a one-shot warning and are skipped there. String-id
+  pointers in the `recipe` field continue to work on both branches.
+- **`PreventActionPower`'s SWIM and ELYTRA enforcement was a no-op.**
+  Holder dispatch fires from `PlayerLifecycleEvents.onPlayerTick` on
+  the `.Pre` phase, but vanilla's `LivingEntity#travel()` and
+  swim-flag update run *after* the .Pre tick the same frame and
+  overwrite anything we reset — so Earth Mage's "can't swim" ability
+  was setting `swimming = false` only to have vanilla immediately set
+  it back to true. Moved SWIM/ELYTRA enforcement out of `onTick` into
+  a new `PreventActionPostTickHandler` subscribed to
+  `PlayerTickEvent.Post`, which runs after vanilla physics. FIRE
+  fire-tick clearing stays on `onTick` since it's not state vanilla
+  touches the same tick.
+- **Compat raycast lacked `shape_type` and along-ray actions** (1.21.1
+  only). `parseRaycast` only supported a point-hit `command`/
+  `entity_action`/`block_action` triple — packs that wanted to scan
+  voxel space (e.g. fire-along-ray, glow-trace) had no way to express
+  it. Added `shape_type` (`collider` / `visual` / `outline`) to
+  control the clip mode, plus `command_along_ray` + `command_step`
+  that walks the ray in `command_step`-block increments executing the
+  command at each step, breaking on the first command exception.
+  Master/26.1 doesn't have `parseRaycast` at all and isn't a hotfix
+  scope — the along-ray feature will land there as part of the next
+  raycast backport.
+
 ## v2.1.3
 
 ### Bug Fixes
