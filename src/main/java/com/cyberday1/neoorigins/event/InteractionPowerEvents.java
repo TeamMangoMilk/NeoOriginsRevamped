@@ -185,7 +185,7 @@ public class InteractionPowerEvents {
         final var slot = event.getSlot();
         final boolean[] rejected = {false};
         ActiveOriginService.forEachOfType(sp, RestrictArmorPower.class, cfg -> {
-            if (RestrictArmorPower.isRestricted(neu, slot, cfg)) rejected[0] = true;
+            if (RestrictArmorPower.isRestricted(sp, neu, slot, cfg)) rejected[0] = true;
         });
         // PreventActionPower armor_equip / chestplate_equip — same eject-on-block
         // behaviour as RestrictArmorPower, gated by the per-slot booleans on Config

@@ -224,7 +224,7 @@ public final class NeoOriginsConfig {
         p("dwarf_mining_hunger");       f("multiplier", 0.75, 0, 10); ep();
 
         // ── Elytrian ──
-        p("elytrian_elytra_boost");     f("strength", 1.5, 0, 10); fi("cooldown_ticks", 40, 0, 72000); ep();
+        p("elytrian_elytra_boost");     f("strength", 1.0, 0, 10); fi("cooldown_ticks", 100, 0, 72000); ep();
 
         // ── Enderian ──
         p("enderian_teleport");         f("range", 50.0, 1, 256); fi("cooldown_ticks", 60, 0, 72000); ep();
@@ -715,6 +715,8 @@ public final class NeoOriginsConfig {
 
     public static final ModConfigSpec.ConfigValue<List<? extends String>> HEAVY_ARMOR_ITEMS;
     public static final ModConfigSpec.ConfigValue<List<? extends String>> LIGHT_ARMOR_ITEMS;
+    public static final ModConfigSpec.DoubleValue HEAVY_ARMOR_MIN_ARMOR_POINTS;
+    public static final ModConfigSpec.DoubleValue MAX_EQUIPPED_ARMOR_POINTS;
 
     static {
         BUILDER.comment(
@@ -726,9 +728,18 @@ public final class NeoOriginsConfig {
 
         HEAVY_ARMOR_ITEMS = BUILDER
             .comment("Additional items/tags to treat as heavy armor.",
-                     "Default heavy armor (iron, gold, diamond, netherite) is defined in the",
-                     "neoorigins:heavy_armor item tag and does not need to be listed here.")
+                     "Use this only for special cases; normal armor is classified by armor-point thresholds below.")
             .defineListAllowEmpty("heavy_armor", List.of(), () -> "", o -> o instanceof String);
+
+        HEAVY_ARMOR_MIN_ARMOR_POINTS = BUILDER
+            .comment("Any single armor piece with at least this many armor points is treated as heavy.",
+                     "Set to -1 to disable per-piece armor-point classification.")
+            .defineInRange("heavy_armor_min_armor_points", 6.0, -1.0, 100.0);
+
+        MAX_EQUIPPED_ARMOR_POINTS = BUILDER
+            .comment("Maximum total armor points allowed for origins that cannot wear heavy armor.",
+                     "Set to -1 to disable the total armor cap. Vanilla full chainmail is 12.")
+            .defineInRange("max_equipped_armor_points", 12.0, -1.0, 100.0);
 
         LIGHT_ARMOR_ITEMS = BUILDER
             .comment("Additional items/tags to treat as light armor.",
@@ -743,6 +754,8 @@ public final class NeoOriginsConfig {
     public static List<String> getHeavyArmorItems() { return (List<String>) (List<?>) HEAVY_ARMOR_ITEMS.get(); }
     @SuppressWarnings("unchecked")
     public static List<String> getLightArmorItems() { return (List<String>) (List<?>) LIGHT_ARMOR_ITEMS.get(); }
+    public static double heavyArmorMinArmorPoints() { return HEAVY_ARMOR_MIN_ARMOR_POINTS.get(); }
+    public static double maxEquippedArmorPoints() { return MAX_EQUIPPED_ARMOR_POINTS.get(); }
 
     // ── Essence Evolution ───────────────────────────────────────────────
     // Origins can evolve through 3 tiers by accumulating mob kills.

@@ -8,8 +8,12 @@ import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.entity.EquipmentSlot;
+import net.minecraft.world.entity.ai.attributes.AttributeModifier;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.item.ArmorItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 
@@ -46,6 +50,12 @@ public class RestrictArmorPower extends PowerType<RestrictArmorPower.Config> {
     @Override
     public Codec<Config> codec() { return Config.CODEC; }
 
+    public static boolean isRestricted(ServerPlayer player, ItemStack stack, EquipmentSlot slot, Config config) {
+        if (stack.isEmpty()) return false;
+        if (exceedsTotalArmorCap(player, stack, slot, config)) return true;
+        return isRestricted(stack, slot, config);
+    }
+
     public static boolean isRestricted(ItemStack stack, EquipmentSlot slot, Config config) {
         if (stack.isEmpty()) return false;
         String slotName = slot.getName();
@@ -59,9 +69,33 @@ public class RestrictArmorPower extends PowerType<RestrictArmorPower.Config> {
                 TagKey<Item> tag = TagKey.create(Registries.ITEM, r.tag().get());
                 if (stack.is(tag)) return true;
                 // Also check config-defined armor class extensions
-                if (matchesConfigArmorClass(stack, r.tag().get())) return true;
+                if (matchesConfigArmorClass(stack, slot, r.tag().get())) return true;
             }
             if (r.item().isEmpty() && r.tag().isEmpty()) return true;
+        }
+        return false;
+    }
+
+    private static boolean exceedsTotalArmorCap(ServerPlayer player, ItemStack candidate, EquipmentSlot candidateSlot, Config config) {
+        if (!hasHeavyArmorRestriction(config)) return false;
+        double maxArmor = NeoOriginsConfig.maxEquippedArmorPoints();
+        if (maxArmor < 0) return false;
+
+        double total = 0;
+        for (EquipmentSlot slot : EquipmentSlot.values()) {
+            if (!slot.isArmor()) continue;
+            ItemStack stack = slot == candidateSlot ? candidate : player.getItemBySlot(slot);
+            total += armorPoints(stack, slot);
+        }
+        return total > maxArmor;
+    }
+
+    private static boolean hasHeavyArmorRestriction(Config config) {
+        ResourceLocation heavyArmor = ResourceLocation.fromNamespaceAndPath("neoorigins", "heavy_armor");
+        for (SlotRestriction restriction : config.restrictions()) {
+            if (restriction.tag().isPresent() && heavyArmor.equals(restriction.tag().get())) {
+                return true;
+            }
         }
         return false;
     }
@@ -71,10 +105,14 @@ public class RestrictArmorPower extends PowerType<RestrictArmorPower.Config> {
      * list that extends the given tag. Only applies to neoorigins:heavy_armor
      * and neoorigins:light_armor tags.
      */
-    private static boolean matchesConfigArmorClass(ItemStack stack, ResourceLocation tagId) {
+    private static boolean matchesConfigArmorClass(ItemStack stack, EquipmentSlot slot, ResourceLocation tagId) {
         List<String> configItems;
         if (tagId.equals(ResourceLocation.fromNamespaceAndPath("neoorigins", "heavy_armor"))) {
             configItems = NeoOriginsConfig.getHeavyArmorItems();
+            double minArmor = NeoOriginsConfig.heavyArmorMinArmorPoints();
+            if (minArmor >= 0 && armorPoints(stack, slot) >= minArmor) {
+                return true;
+            }
         } else if (tagId.equals(ResourceLocation.fromNamespaceAndPath("neoorigins", "light_armor"))) {
             configItems = NeoOriginsConfig.getLightArmorItems();
         } else {
@@ -93,5 +131,22 @@ public class RestrictArmorPower extends PowerType<RestrictArmorPower.Config> {
             }
         }
         return false;
+    }
+
+    private static double armorPoints(ItemStack stack, EquipmentSlot slot) {
+        if (stack.isEmpty()) return 0;
+        if (stack.getItem() instanceof ArmorItem armorItem) {
+            return armorItem.getDefense();
+        }
+
+        double armor = 0;
+        for (var entry : stack.getAttributeModifiers().modifiers()) {
+            if (!entry.attribute().equals(Attributes.ARMOR) || !entry.slot().test(slot)) continue;
+            AttributeModifier modifier = entry.modifier();
+            if (modifier.operation() == AttributeModifier.Operation.ADD_VALUE) {
+                armor += modifier.amount();
+            }
+        }
+        return armor;
     }
 }
