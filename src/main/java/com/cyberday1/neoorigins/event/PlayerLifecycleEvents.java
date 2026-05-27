@@ -52,6 +52,7 @@ public class PlayerLifecycleEvents {
                 }
             } else {
                 pendingOriginCheck.remove(sp.getUUID());
+                applyStoredPowersOnLogin(sp);
                 checkAndPromptOrigin(sp);
             }
         }
@@ -88,17 +89,7 @@ public class PlayerLifecycleEvents {
     public static void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer sp)) return;
 
-        repairCorruptedVitals(sp);
-
-        com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(sp);
-        ActiveOriginService.forEach(sp, holder -> holder.onLogin(sp));
-
-        // Clamp health to the (possibly changed) max — catches stale health
-        // from modifier loss, evolution tier changes while offline, or attribute
-        // reloads that reduced max_health below current health.
-        if (sp.getHealth() > sp.getMaxHealth()) {
-            sp.setHealth(sp.getMaxHealth());
-        }
+        applyStoredPowersOnLogin(sp);
 
         NeoOriginsNetwork.syncRegistryToPlayer(sp);
         NeoOriginsNetwork.syncToPlayer(sp);
@@ -109,6 +100,20 @@ public class PlayerLifecycleEvents {
             pendingOriginCheck.put(sp.getUUID(), LOGIN_RETRY_TICKS);
         } else {
             checkAndPromptOrigin(sp);
+        }
+    }
+
+    private static void applyStoredPowersOnLogin(ServerPlayer sp) {
+        repairCorruptedVitals(sp);
+
+        ActiveOriginService.invalidate(sp.getUUID());
+        com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(sp);
+        ActiveOriginService.forEach(sp, holder -> holder.onLogin(sp));
+        ActiveOriginService.reconcileAttributeModifiers(sp);
+
+        // Clamp health to the possibly changed max.
+        if (sp.getHealth() > sp.getMaxHealth()) {
+            sp.setHealth(sp.getMaxHealth());
         }
     }
 
@@ -208,6 +213,13 @@ public class PlayerLifecycleEvents {
         NeoOriginsNetwork.syncActivePowersToPlayer(sp);
         com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
             sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.DIMENSION_CHANGE);
+    }
+
+    @SubscribeEvent
+    public static void onStartTracking(PlayerEvent.StartTracking event) {
+        if (!(event.getEntity() instanceof ServerPlayer tracker)) return;
+        if (!(event.getTarget() instanceof ServerPlayer tracked)) return;
+        NeoOriginsNetwork.syncPlayerVisualToPlayer(tracked, tracker);
     }
 
     @SubscribeEvent

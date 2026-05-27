@@ -400,6 +400,7 @@ public class OriginCommand {
     private static int executeGui(CommandContext<CommandSourceStack> ctx, ServerPlayer player) throws CommandSyntaxException {
         ServerPlayer target = player != null ? player : ctx.getSource().getPlayerOrException();
         NeoOriginsNetwork.syncRegistryToPlayer(target);
+        NeoOriginsNetwork.syncToPlayer(target);
         if (player != null) {
             // OP opened the picker for another player — authorize that
             // (non-OP) player to re-select for this picker session. The

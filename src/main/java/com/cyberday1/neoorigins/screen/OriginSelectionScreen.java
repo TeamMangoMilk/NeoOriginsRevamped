@@ -378,7 +378,7 @@ public class OriginSelectionScreen extends Screen {
         // server sees `hadAllOrigins` flip true and runs grantAllPending.
         // Otherwise the player would sit in a half-selected state with no
         // starting_equipment items granted. See tester feedback 2026-04-22.
-        var origins = ClientOriginState.getOrigins();
+        var origins = presenter.sessionOrigins();
         boolean hasClass = origins.keySet().stream().anyMatch(CLASS_LAYER_ID::equals);
         boolean hasAnyOrigin = !origins.isEmpty();
         if (hasAnyOrigin && !hasClass) {

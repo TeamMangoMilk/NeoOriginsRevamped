@@ -1,9 +1,11 @@
 {
   "type": "neoorigins:phantom_form",
   "invisibility": true,
-  "no_gravity": true,
+  "no_gravity": false,
   "default_off": true,
   "min_food_level": 6,
+  "fog_enabled": true,
+  "fog_distance": 50.0,
   "blocked_blocks": [
     "minecraft:obsidian",
     "minecraft:crying_obsidian",

@@ -12,6 +12,9 @@
     "FoodDataTickMixin",
     "FoodDataNoRegenMixin",
     "EnderManLookMixin",
+    "BlockStatePhasingMixin",
+    "EntityPhasingMixin",
+    "PlayerPhasingPoseMixin",
     "EntityMakeStuckInBlockMixin",
     "EntityBlockSpeedFactorMixin",
     "PlayerStartFallFlyingMixin",
@@ -29,8 +32,13 @@
     "client.GuiHudBarsMixin",
     "client.PlayerWaterVisionMixin",
     "client.LocalPlayerNaturalGlideMixin",
+    "client.LocalPlayerPhasingControlsMixin",
+    "client.FogRendererPhasingMixin",
+    "client.LocalPlayerPhasingEffectMapMixin",
     "client.LocalPlayerElytraSoundMixin",
     "client.LocalPlayerNoPhysicsMixin",
+    "client.ScreenEffectPhasingMixin",
+    "client.LivingEntityRendererModelColorMixin",
     "client.MerchantScreenTreasureGlowMixin"
   ],
   "injectors": {

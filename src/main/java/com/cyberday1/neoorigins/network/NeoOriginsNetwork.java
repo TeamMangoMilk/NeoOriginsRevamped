@@ -24,6 +24,7 @@ import com.cyberday1.neoorigins.network.payload.SyncResourcePayload;
 import com.cyberday1.neoorigins.network.payload.SyncOriginRegistryPayload;
 import com.cyberday1.neoorigins.network.payload.SyncMobOriginPayload;
 import com.cyberday1.neoorigins.network.payload.SyncOriginsPayload;
+import com.cyberday1.neoorigins.network.payload.SyncPlayerVisualPayload;
 import com.cyberday1.neoorigins.api.origin.Origin;
 import com.cyberday1.neoorigins.data.PowerDataManager;
 import com.cyberday1.neoorigins.NeoOriginsConfig;
@@ -124,6 +125,12 @@ public class NeoOriginsNetwork {
             SyncActivePowersPayload.TYPE,
             SyncActivePowersPayload.STREAM_CODEC,
             NeoOriginsNetwork::handleSyncActivePowers
+        );
+
+        registrar.playToClient(
+            SyncPlayerVisualPayload.TYPE,
+            SyncPlayerVisualPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleSyncPlayerVisual
         );
 
         registrar.playToClient(
@@ -343,6 +350,13 @@ public class NeoOriginsNetwork {
     private static void handleSyncActivePowers(SyncActivePowersPayload payload, IPayloadContext ctx) {
         ctx.enqueueWork(() ->
             com.cyberday1.neoorigins.client.ClientActivePowers.set(payload.powers(), payload.capabilities())
+        );
+    }
+
+    private static void handleSyncPlayerVisual(SyncPlayerVisualPayload payload, IPayloadContext ctx) {
+        ctx.enqueueWork(() ->
+            com.cyberday1.neoorigins.client.ClientPlayerVisuals.setModelColor(
+                payload.entityId(), payload.modelColor())
         );
     }
 
@@ -925,6 +939,30 @@ public class NeoOriginsNetwork {
         Set<String> capabilities = new HashSet<>();
         collectActivePowers(player, powerMap, capabilities);
         PacketDistributor.sendToPlayer(player, new SyncActivePowersPayload(powerMap, capabilities));
+        syncPlayerVisualToTrackers(player, capabilities);
+    }
+
+    public static void syncPlayerVisualToPlayer(ServerPlayer visualPlayer, ServerPlayer recipient) {
+        Map<ResourceLocation, Boolean> ignoredPowers = new HashMap<>();
+        Set<String> capabilities = new HashSet<>();
+        collectActivePowers(visualPlayer, ignoredPowers, capabilities);
+        PacketDistributor.sendToPlayer(recipient,
+            new SyncPlayerVisualPayload(visualPlayer.getId(), findCapabilityData(capabilities, "model_color")));
+    }
+
+    private static void syncPlayerVisualToTrackers(ServerPlayer player, Set<String> capabilities) {
+        PacketDistributor.sendToPlayersTrackingEntityAndSelf(player,
+            new SyncPlayerVisualPayload(player.getId(), findCapabilityData(capabilities, "model_color")));
+    }
+
+    private static java.util.Optional<String> findCapabilityData(Set<String> capabilities, String prefix) {
+        String needle = prefix + ":";
+        for (String capability : capabilities) {
+            if (capability.startsWith(needle)) {
+                return java.util.Optional.of(capability.substring(needle.length()));
+            }
+        }
+        return java.util.Optional.empty();
     }
 
     /**

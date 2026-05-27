@@ -118,12 +118,12 @@ public class PlayerOriginData {
         // Forward-migrate to the new canonical "neoorigins:origin" so saved
         // selections survive the rename; if both keys exist (re-pick on the
         // new build before this load), the canonical entry wins.
-        ResourceLocation legacy = ResourceLocation.fromNamespaceAndPath("origins", "origin");
-        ResourceLocation canonical = ResourceLocation.fromNamespaceAndPath("neoorigins", "origin");
-        ResourceLocation legacyValue = data.origins.remove(legacy);
-        if (legacyValue != null && !data.origins.containsKey(canonical)) {
-            data.origins.put(canonical, legacyValue);
-        }
+        migrateLayerKey(data.origins,
+            ResourceLocation.fromNamespaceAndPath("origins", "origin"),
+            ResourceLocation.fromNamespaceAndPath("neoorigins", "origin"));
+        migrateLayerKey(data.origins,
+            ResourceLocation.fromNamespaceAndPath("origins", "class"),
+            ResourceLocation.fromNamespaceAndPath("neoorigins", "class"));
         data.hadAllOrigins = hadAll;
         data.grantedEquipmentPowers.addAll(equipment);
         data.shadowOrbs.addAll(orbs);
@@ -143,6 +143,15 @@ public class PlayerOriginData {
         data.pickerAbandoned = abandoned;
         return data;
     }));
+
+    private static void migrateLayerKey(Map<ResourceLocation, ResourceLocation> origins,
+                                        ResourceLocation legacy,
+                                        ResourceLocation canonical) {
+        ResourceLocation legacyValue = origins.remove(legacy);
+        if (legacyValue != null && !origins.containsKey(canonical)) {
+            origins.put(canonical, legacyValue);
+        }
+    }
 
     // ── Custom float storage ───────────────────────────────────────────
 

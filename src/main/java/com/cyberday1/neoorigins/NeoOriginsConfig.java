@@ -305,10 +305,10 @@ public final class NeoOriginsConfig {
         p("necromancer_daylight_damage");f("damage_per_second", 1.5, 0, 100); ep();
 
         // ── Phantom ──
-        p("phantom_form");              fb("invisibility", true); fb("no_gravity", true); fb("default_off", true); fi("min_food_level", 6, 0, 20); ep();
+        p("phantom_form");              fb("invisibility", true); fb("no_gravity", false); fb("default_off", true); fi("min_food_level", 6, 0, 20); fb("fog_enabled", true); f("fog_distance", 50.0, 0.1, 256); ep();
         p("phantom_translucent");       f("alpha", 0.55, 0, 1); ep();
         p("phantom_burn_in_daylight");  f("damage_per_second", 1.0, 0, 100); fb("ignite", true); ep();
-        p("phantom_hunger_over_time");  f("exhaustion_per_tick", 0.005, 0, 10); ep();
+        p("phantom_hunger_over_time");  f("exhaustion_per_tick", 0.0406, 0, 10); ep();
         p("phantom_fragile");           f("amount", -6.0, -100, 100); ep();
 
         // Specter
@@ -419,9 +419,9 @@ public final class NeoOriginsConfig {
         // (wraith_ascended_daylight_damage and wraith_ascended_weakness_aura
         // have tuneable values nested in entity_action; shallow overrides
         // can't reach them. Edit JSON directly to retune.)
-        p("wraith_phase");              fb("always_on", false); f("exhaustion_per_tick", 0.15, 0, 1.0); ep();
-        p("wraith_evolved_phase");      fb("always_on", false); f("exhaustion_per_tick", 0.1125, 0, 1.0); ep();
-        p("wraith_apex_phase");         fb("always_on", false); f("exhaustion_per_tick", 0.075, 0, 1.0); ep();
+        p("wraith_phase");              fb("always_on", false); f("exhaustion_per_tick", 0.15, 0, 1.0); fb("fog_enabled", true); f("fog_distance", 50.0, 0.1, 256); ep();
+        p("wraith_evolved_phase");      fb("always_on", false); f("exhaustion_per_tick", 0.1125, 0, 1.0); fb("fog_enabled", true); f("fog_distance", 50.0, 0.1, 256); ep();
+        p("wraith_apex_phase");         fb("always_on", false); f("exhaustion_per_tick", 0.075, 0, 1.0); fb("fog_enabled", true); f("fog_distance", 50.0, 0.1, 256); ep();
         p("wraith_daylight_damage");    f("damage_per_second", 1.0, 0, 100); ep();
         p("wraith_hunger_drain");       f("value", 1.75, 0, 100); ep();
         p("wraith_apex_hunger_drain");  f("value", 1.25, 0, 100); ep();
@@ -917,6 +917,29 @@ public final class NeoOriginsConfig {
     public static int mountRequestTimeoutSeconds() { return MOUNT_REQUEST_TIMEOUT_SECONDS.get(); }
 
     public static final ModConfigSpec SPEC = BUILDER.build();
+
+    public static void onConfigEvent(net.neoforged.fml.event.config.ModConfigEvent event) {
+        if (event.getConfig().getSpec() == SPEC) {
+            forceTestingPhasingFogDefaults();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void setPowerOverride(String power, String field, Object value) {
+        Map<String, ModConfigSpec.ConfigValue<?>> fields = POWER_OVERRIDES.get("neoorigins:" + power);
+        if (fields == null) return;
+        ModConfigSpec.ConfigValue<?> configValue = fields.get(field);
+        if (configValue == null) return;
+        ((ModConfigSpec.ConfigValue<Object>) configValue).set(value);
+    }
+
+    private static void forceTestingPhasingFogDefaults() {
+        for (String power : List.of("phantom_form", "wraith_phase", "wraith_evolved_phase", "wraith_apex_phase")) {
+            setPowerOverride(power, "fog_enabled", true);
+            setPowerOverride(power, "fog_distance", 50.0);
+        }
+        SPEC.save();
+    }
 
     public static RandomMode getRandomMode() {
         return RANDOM_MODE.get();

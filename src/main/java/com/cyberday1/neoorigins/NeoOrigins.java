@@ -63,6 +63,7 @@ public class NeoOrigins {
 
         // Register TOML config (config/neoorigins-common.toml)
         modContainer.registerConfig(ModConfig.Type.COMMON, NeoOriginsConfig.SPEC);
+        modEventBus.addListener(NeoOriginsConfig::onConfigEvent);
 
         if (FMLEnvironment.dist == Dist.CLIENT) {
             modContainer.registerConfig(ModConfig.Type.CLIENT,

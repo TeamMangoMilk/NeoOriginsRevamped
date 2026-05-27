@@ -5,18 +5,12 @@ import com.cyberday1.neoorigins.power.builtin.base.AbstractTogglePower;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
-import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.stream.Collectors;
 
 /**
  * Wraith Phase -- toggleable spectral phasing.
@@ -32,9 +26,6 @@ public class WraithPhasePower extends AbstractTogglePower<WraithPhasePower.Confi
 
     private static final Set<String> CAPS = Set.of("wall_phase");
 
-    /** Cached parsed blocked-block sets, keyed by the string list to avoid per-tick allocation. */
-    private static final Map<List<String>, Set<ResourceLocation>> BLOCKED_CACHE = new ConcurrentHashMap<>();
-
     @Override
     public Set<String> capabilities(Config config) { return CAPS; }
 
@@ -42,6 +33,8 @@ public class WraithPhasePower extends AbstractTogglePower<WraithPhasePower.Confi
         List<String> blockedBlocks,
         float exhaustionPerTick,
         boolean alwaysOn,
+        boolean fogEnabled,
+        double viewDistance,
         String type
     ) implements PowerConfiguration {
         public static final Codec<Config> CODEC = RecordCodecBuilder.create(inst -> inst.group(
@@ -49,8 +42,17 @@ public class WraithPhasePower extends AbstractTogglePower<WraithPhasePower.Confi
                 .forGetter(Config::blockedBlocks),
             Codec.FLOAT.optionalFieldOf("exhaustion_per_tick", 0.15F).forGetter(Config::exhaustionPerTick),
             Codec.BOOL.optionalFieldOf("always_on", false).forGetter(Config::alwaysOn),
+            Codec.BOOL.optionalFieldOf("fog_enabled", true).forGetter(Config::fogEnabled),
+            Codec.DOUBLE.optionalFieldOf("fog_distance", 50.0).forGetter(Config::viewDistance),
             Codec.STRING.optionalFieldOf("type", "").forGetter(Config::type)
         ).apply(inst, Config::new));
+    }
+
+    @Override
+    public Set<String> capabilities(ServerPlayer player, Config config) {
+        return config.fogEnabled()
+            ? Set.of("wall_phase", "phasing_visual:" + config.viewDistance())
+            : CAPS;
     }
 
     /** When always_on, the power is passive — no skill key slot. */
@@ -69,64 +71,18 @@ public class WraithPhasePower extends AbstractTogglePower<WraithPhasePower.Confi
 
     @Override
     protected void tickEffect(ServerPlayer player, Config config) {
-        // --- blocked-block check (cached to avoid per-tick allocation) ---
-        Set<ResourceLocation> blocked = BLOCKED_CACHE.computeIfAbsent(config.blockedBlocks(),
-            list -> list.stream().map(ResourceLocation::parse).collect(Collectors.toUnmodifiableSet()));
-
-        AABB box = player.getBoundingBox().deflate(0.05);
-        boolean inBlockedBlock = false;
-        for (BlockPos pos : BlockPos.betweenClosed(
-                BlockPos.containing(box.minX, box.minY, box.minZ),
-                BlockPos.containing(box.maxX, box.maxY, box.maxZ))) {
-            BlockState state = player.level().getBlockState(pos);
-            if (!state.isAir()) {
-                ResourceLocation blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock());
-                if (blocked.contains(blockId)) {
-                    inBlockedBlock = true;
-                    break;
-                }
-            }
-        }
-
-        // Noclip -- always on so the server accepts client-predicted phased
-        // positions. Disabled when inside a blocked block so vanilla collision
-        // pushes the player out.
-        player.noPhysics = !inBlockedBlock;
-
         boolean insideSolid = isInsideSolid(player);
-        boolean crouching = player.isShiftKeyDown();
 
-        if (insideSolid || crouching) {
-            // Inside a block OR holding shift on the surface -- enable flight
-            // for vertical control (jump = up, shift = down). Holding shift
-            // on the surface lets the player phase downward into the ground.
-            var abilities = player.getAbilities();
-            boolean changed = false;
-            if (!abilities.mayfly)  { abilities.mayfly  = true;  changed = true; }
-            if (!abilities.flying)  { abilities.flying  = true;  changed = true; }
-            if (changed) player.onUpdateAbilities();
-        } else {
-            // On surface, not crouching -- disable flight, walk normally.
-            var abilities = player.getAbilities();
-            if (abilities.flying && !player.isCreative() && !player.isSpectator()) {
-                abilities.mayfly = false;
-                abilities.flying = false;
-                player.onUpdateAbilities();
-            }
-            // Zero server-side vertical velocity while noPhysics is true.
-            // The client handles actual movement via the mixin; the server
-            // just needs to accept client positions. Without this, the
-            // server's Entity.move() accumulates velocity (both up from
-            // jumps and down from gravity) with no collision to stop it,
-            // causing the player to float or sink on the server side.
-            Vec3 vel = player.getDeltaMovement();
-            if (vel.y != 0) {
-                player.setDeltaMovement(vel.x, 0, vel.z);
-            }
+        var abilities = player.getAbilities();
+        if ((abilities.mayfly || abilities.flying) && !player.isCreative() && !player.isSpectator()) {
+            abilities.mayfly = false;
+            abilities.flying = false;
+            player.onUpdateAbilities();
         }
 
         // Hunger drain while phasing through solid blocks
         if (insideSolid) {
+            player.setSprinting(false);
             player.causeFoodExhaustion(config.exhaustionPerTick());
         }
 
@@ -135,7 +91,9 @@ public class WraithPhasePower extends AbstractTogglePower<WraithPhasePower.Confi
 
     @Override
     protected void removeEffect(ServerPlayer player, Config config) {
-        player.noPhysics = false;
+        if (!player.isSpectator()) {
+            player.noPhysics = false;
+        }
         var abilities = player.getAbilities();
         if (!player.isCreative() && !player.isSpectator()) {
             abilities.mayfly = false;

@@ -1,5 +1,7 @@
 {
   "type": "neoorigins:wraith_phase",
   "blocked_blocks": ["minecraft:bedrock"],
-  "exhaustion_per_tick": 0.075
+  "exhaustion_per_tick": 0.075,
+  "fog_enabled": true,
+  "fog_distance": 50.0
 }

@@ -23,12 +23,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * Original-Phantom-style toggle: while active the player becomes a spectator-lite
- * phantom form, with configurable hunger gating and unphasable blocks.
+ * Original-Phantom-style toggle: while active the player becomes invisible and
+ * can phase through most blocks, with configurable hunger gating and unphasable
+ * blocks.
  */
 public class PhantomFormPower extends AbstractTogglePower<PhantomFormPower.Config> {
 
-    private static final Set<String> CAPS = Set.of("no_physics");
+    private static final Set<String> CAPS = Set.of("phantom_phase");
     private static final Map<List<String>, Set<ResourceLocation>> BLOCKED_CACHE = new ConcurrentHashMap<>();
 
     @Override
@@ -39,19 +40,30 @@ public class PhantomFormPower extends AbstractTogglePower<PhantomFormPower.Confi
         boolean noGravity,
         boolean defaultOff,
         int minFoodLevel,
+        boolean fogEnabled,
+        double viewDistance,
         List<String> blockedBlocks,
         String type
     ) implements PowerConfiguration {
         public static final Codec<Config> CODEC = RecordCodecBuilder.create(inst -> inst.group(
             Codec.BOOL.optionalFieldOf("invisibility", true).forGetter(Config::invisibility),
-            Codec.BOOL.optionalFieldOf("no_gravity", true).forGetter(Config::noGravity),
+            Codec.BOOL.optionalFieldOf("no_gravity", false).forGetter(Config::noGravity),
             Codec.BOOL.optionalFieldOf("default_off", false).forGetter(Config::defaultOff),
             Codec.INT.optionalFieldOf("min_food_level", 0).forGetter(Config::minFoodLevel),
+            Codec.BOOL.optionalFieldOf("fog_enabled", true).forGetter(Config::fogEnabled),
+            Codec.DOUBLE.optionalFieldOf("fog_distance", 50.0).forGetter(Config::viewDistance),
             Codec.STRING.listOf().optionalFieldOf("blocked_blocks",
                 List.of("minecraft:obsidian", "minecraft:crying_obsidian", "minecraft:bedrock"))
                 .forGetter(Config::blockedBlocks),
             Codec.STRING.optionalFieldOf("type", "").forGetter(Config::type)
         ).apply(inst, Config::new));
+    }
+
+    @Override
+    public Set<String> capabilities(ServerPlayer player, Config config) {
+        return config.fogEnabled()
+            ? Set.of("phantom_phase", "phasing_visual:" + config.viewDistance())
+            : CAPS;
     }
 
     @Override
@@ -64,6 +76,7 @@ public class PhantomFormPower extends AbstractTogglePower<PhantomFormPower.Confi
 
     @Override
     protected boolean canToggleOn(ServerPlayer player, Config config) {
+        if (player.isCreative() || player.isSpectator()) return true;
         return player.getFoodData().getFoodLevel() > config.minFoodLevel();
     }
 
@@ -75,9 +88,11 @@ public class PhantomFormPower extends AbstractTogglePower<PhantomFormPower.Confi
 
     @Override
     protected void tickEffect(ServerPlayer player, Config config) {
-        if (player.getFoodData().getFoodLevel() <= config.minFoodLevel()) {
+        if (!player.isCreative() && !player.isSpectator()
+            && player.getFoodData().getFoodLevel() <= config.minFoodLevel()) {
             player.getData(OriginAttachments.originData()).setPowerToggledOff(getToggleKey(config), true);
             removeEffect(player, config);
+            com.cyberday1.neoorigins.network.NeoOriginsNetwork.syncActivePowersToPlayer(player);
             player.sendSystemMessage(Component.translatable("neoorigins.toggle.no_food")
                 .withStyle(ChatFormatting.RED));
             return;
@@ -89,18 +104,22 @@ public class PhantomFormPower extends AbstractTogglePower<PhantomFormPower.Confi
                 player.addEffect(new MobEffectInstance(MobEffects.INVISIBILITY, 300, 0, true, false));
             }
         }
-        if (config.noGravity()) {
-            player.setNoGravity(true);
-        }
+        boolean blocked = isInsideBlockedBlock(player, config);
+        boolean insideSolid = isInsideSolid(player);
+        boolean phaseDown = player.isShiftKeyDown() && player.onGround();
+
+        player.setNoGravity(config.noGravity() && insideSolid && !blocked);
 
         var abilities = player.getAbilities();
-        boolean abilitiesChanged = false;
-        if (!abilities.mayfly)  { abilities.mayfly  = true;  abilitiesChanged = true; }
-        if (!abilities.flying)  { abilities.flying  = true;  abilitiesChanged = true; }
-        if (abilitiesChanged) player.onUpdateAbilities();
-
-        player.noPhysics = !isInsideBlockedBlock(player, config);
-        player.fallDistance = 0.0F;
+        if ((abilities.mayfly || abilities.flying) && !player.isCreative() && !player.isSpectator()) {
+            abilities.mayfly = false;
+            abilities.flying = false;
+            player.onUpdateAbilities();
+        }
+        if (insideSolid || phaseDown) {
+            player.setSprinting(false);
+            player.fallDistance = 0.0F;
+        }
     }
 
     @Override
@@ -109,7 +128,9 @@ public class PhantomFormPower extends AbstractTogglePower<PhantomFormPower.Confi
             player.removeEffect(MobEffects.INVISIBILITY);
         }
         player.setNoGravity(false);
-        player.noPhysics = false;
+        if (!player.isSpectator()) {
+            player.noPhysics = false;
+        }
         var abilities = player.getAbilities();
         if (!player.isCreative() && !player.isSpectator()) {
             abilities.mayfly = false;
@@ -132,6 +153,19 @@ public class PhantomFormPower extends AbstractTogglePower<PhantomFormPower.Confi
             if (state.isAir()) continue;
             ResourceLocation blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock());
             if (blocked.contains(blockId)) return true;
+        }
+        return false;
+    }
+
+    private static boolean isInsideSolid(ServerPlayer player) {
+        AABB box = player.getBoundingBox().deflate(0.1);
+        for (BlockPos pos : BlockPos.betweenClosed(
+                BlockPos.containing(box.minX, box.minY + 0.1, box.minZ),
+                BlockPos.containing(box.maxX, box.maxY - 0.1, box.maxZ))) {
+            BlockState state = player.level().getBlockState(pos);
+            if (!state.isAir() && !state.getCollisionShape(player.level(), pos).isEmpty()) {
+                return true;
+            }
         }
         return false;
     }

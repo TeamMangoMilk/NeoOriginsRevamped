@@ -25,6 +25,7 @@ public class OriginSelectionPresenter {
     private int listScrollOffset             = 0;
     private String searchText                = "";
     private boolean forceReselect            = false;
+    private final Map<ResourceLocation, ResourceLocation> sessionOrigins = new HashMap<>();
 
     private final List<OriginListEntry> allRows      = new ArrayList<>();
     private final List<OriginListEntry> filteredRows = new ArrayList<>();
@@ -42,6 +43,9 @@ public class OriginSelectionPresenter {
      * When forceReselect is true, includes all layers (not just unfilled ones).
      */
     public boolean init() {
+        if (sessionOrigins.isEmpty()) {
+            sessionOrigins.putAll(ClientOriginState.getOrigins());
+        }
         if (forceReselect) {
             pendingLayers = LayerDataManager.INSTANCE.getSortedLayers().stream()
                 .filter(l -> !l.hidden())
@@ -49,7 +53,7 @@ public class OriginSelectionPresenter {
         } else {
             pendingLayers = LayerDataManager.INSTANCE.getSortedLayers().stream()
                 .filter(l -> !l.hidden())
-                .filter(l -> !ClientOriginState.getOrigins().containsKey(l.id()))
+                .filter(l -> !sessionOrigins.containsKey(l.id()))
                 .toList();
         }
         skipEmptyLayers();
@@ -66,7 +70,7 @@ public class OriginSelectionPresenter {
         OriginLayer layer = currentLayer();
 
         List<ResourceLocation> rawIds = new ArrayList<>();
-        var choices = ClientOriginState.getOrigins();
+        var choices = sessionOrigins;
         for (var co : layer.origins()) {
             if (!co.isAvailable(choices)) continue;
             if (NeoOriginsConfig.isOriginDisabled(co.origin())) continue;
@@ -145,9 +149,7 @@ public class OriginSelectionPresenter {
         if (selectedOriginId == null) return !isDone();
         OriginLayer layer = currentLayer();
         PacketDistributor.sendToServer(new ChooseOriginPayload(layer.id(), selectedOriginId));
-        var updated = new HashMap<>(ClientOriginState.getOrigins());
-        updated.put(layer.id(), selectedOriginId);
-        ClientOriginState.setOrigins(updated, false);
+        sessionOrigins.put(layer.id(), selectedOriginId);
         currentLayerIndex++;
         selectedOriginId = null;
         skipEmptyLayers();
@@ -173,7 +175,7 @@ public class OriginSelectionPresenter {
      * Advances currentLayerIndex past any empty layers.
      */
     private void skipEmptyLayers() {
-        var choices = ClientOriginState.getOrigins();
+        var choices = sessionOrigins;
         while (currentLayerIndex < pendingLayers.size()) {
             OriginLayer layer = pendingLayers.get(currentLayerIndex);
             boolean hasAny = layer.origins().stream()
@@ -198,6 +200,9 @@ public class OriginSelectionPresenter {
     public List<OriginListEntry> filteredRows(){ return filteredRows; }
     public List<ResourceLocation> allOriginIds()     { return allOriginIds; }
     public String searchText()                 { return searchText; }
+    public Map<ResourceLocation, ResourceLocation> sessionOrigins() {
+        return Collections.unmodifiableMap(sessionOrigins);
+    }
 
     private static String getModName(String namespace) {
         return ModList.get()

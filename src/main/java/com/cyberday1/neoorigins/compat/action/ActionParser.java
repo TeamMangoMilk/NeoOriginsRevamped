@@ -779,7 +779,7 @@ public final class ActionParser {
 
     private static EntityAction parseExhaust(JsonObject json) {
         float amount = json.has("amount") ? json.get("amount").getAsFloat() : 1.0f;
-        return player -> player.getFoodData().addExhaustion(amount);
+        return player -> player.causeFoodExhaustion(amount);
     }
 
     private static EntityAction parseChangeResource(JsonObject json) {

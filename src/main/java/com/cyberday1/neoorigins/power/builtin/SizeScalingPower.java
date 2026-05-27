@@ -48,6 +48,7 @@ public class SizeScalingPower extends PowerType<SizeScalingPower.Config> {
     @Override
     public void onGranted(ServerPlayer player, Config config) {
         applyModifiers(player, config, true);
+        player.refreshDimensions();
         // On 1.20.5+ the vanilla minecraft:scale attribute is authoritative and
         // Pehkui reads it directly. Mirroring to Pehkui's BASE on top of the
         // vanilla attribute caused double-scaling (1.2 * 1.2 = 1.44x).
@@ -56,6 +57,7 @@ public class SizeScalingPower extends PowerType<SizeScalingPower.Config> {
     @Override
     public void onRevoked(ServerPlayer player, Config config) {
         clearSizeModifiers(player);
+        player.refreshDimensions();
     }
 
     /**
