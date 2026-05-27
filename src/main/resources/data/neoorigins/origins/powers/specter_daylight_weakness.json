@@ -1,0 +1,15 @@
+{
+  "type": "neoorigins:attribute_modifier",
+  "attribute": "minecraft:attack_damage",
+  "amount": -0.25,
+  "operation": "add_multiplied_base",
+  "condition": {
+    "type": "neoorigins:and",
+    "conditions": [
+      { "type": "neoorigins:daytime" },
+      { "type": "neoorigins:exposed_to_sky" },
+      { "type": "neoorigins:not", "condition": { "type": "neoorigins:in_rain" } },
+      { "type": "neoorigins:not", "condition": { "type": "neoorigins:in_water" } }
+    ]
+  }
+}

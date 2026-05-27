@@ -312,10 +312,11 @@ public final class NeoOriginsConfig {
         p("phantom_fragile");           f("amount", -6.0, -100, 100); ep();
 
         // Specter
-        p("specter_elytra_boost");      f("strength", 1.5, 0, 10); fi("cooldown_ticks", 40, 0, 72000); ep();
+        p("specter_elytra_boost");      f("strength", 1.0, 0, 10); fi("cooldown_ticks", 200, 0, 72000); ep();
         p("specter_moon_armor");        fi("amplifier", 0, 0, 4); ep();
         p("specter_soul_drain");        f("heal_amount", 2.0, 0, 100); ep();
         p("specter_sunburn");           f("damage_per_second", 1.5, 0, 100); fb("ignite", true); ep();
+        p("specter_daylight_weakness"); f("amount", -0.25, -10, 10); ep();
         p("specter_fragile");           f("amount", -4.0, -100, 100); ep();
         p("specter_evolved_hp");        f("amount", 2.0, -100, 100); ep();
         p("specter_ascended_hp");       f("amount", 4.0, -100, 100); ep();
@@ -917,29 +918,6 @@ public final class NeoOriginsConfig {
     public static int mountRequestTimeoutSeconds() { return MOUNT_REQUEST_TIMEOUT_SECONDS.get(); }
 
     public static final ModConfigSpec SPEC = BUILDER.build();
-
-    public static void onConfigEvent(net.neoforged.fml.event.config.ModConfigEvent event) {
-        if (event.getConfig().getSpec() == SPEC) {
-            forceTestingPhasingFogDefaults();
-        }
-    }
-
-    @SuppressWarnings("unchecked")
-    private static void setPowerOverride(String power, String field, Object value) {
-        Map<String, ModConfigSpec.ConfigValue<?>> fields = POWER_OVERRIDES.get("neoorigins:" + power);
-        if (fields == null) return;
-        ModConfigSpec.ConfigValue<?> configValue = fields.get(field);
-        if (configValue == null) return;
-        ((ModConfigSpec.ConfigValue<Object>) configValue).set(value);
-    }
-
-    private static void forceTestingPhasingFogDefaults() {
-        for (String power : List.of("phantom_form", "wraith_phase", "wraith_evolved_phase", "wraith_apex_phase")) {
-            setPowerOverride(power, "fog_enabled", true);
-            setPowerOverride(power, "fog_distance", 50.0);
-        }
-        SPEC.save();
-    }
 
     public static RandomMode getRandomMode() {
         return RANDOM_MODE.get();

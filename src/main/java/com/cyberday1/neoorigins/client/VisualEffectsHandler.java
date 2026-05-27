@@ -3,21 +3,17 @@ package com.cyberday1.neoorigins.client;
 import com.cyberday1.neoorigins.NeoOrigins;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.shaders.FogShape;
-import com.mojang.brigadier.arguments.FloatArgumentType;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Camera;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.FogRenderer;
-import net.minecraft.commands.Commands;
 import net.minecraft.core.BlockPos;
-import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
-import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
 import net.neoforged.neoforge.client.event.RenderGuiEvent;
 import net.neoforged.neoforge.client.event.ViewportEvent;
 import net.neoforged.neoforge.event.tick.PlayerTickEvent;
@@ -45,9 +41,6 @@ public final class VisualEffectsHandler {
     private static final float DEFAULT_PHASING_FOG_COLOR = 0.22F;
     private static final float PHASING_FOG_START = 0.0F;
     private static final FogShape PHASING_FOG_SHAPE = FogShape.SPHERE;
-    private static Float debugPhasingViewDistance = null;
-    private static float phasingTerrainFadeStart = DEFAULT_PHASING_TERRAIN_FADE_START;
-    private static float phasingFogColor = DEFAULT_PHASING_FOG_COLOR;
     private static boolean distantHorizonsRenderingSuppressed = false;
     private static boolean distantHorizonsReflectionFailed = false;
     private static Object previousDistantHorizonsRenderingValue = null;
@@ -101,50 +94,6 @@ public final class VisualEffectsHandler {
     // ---- Lava Vision ----
 
     @SubscribeEvent
-    public static void onRegisterClientCommands(RegisterClientCommandsEvent event) {
-        event.getDispatcher().register(Commands.literal("neooriginsfog")
-            .then(Commands.literal("distance")
-                .then(Commands.argument("blocks", FloatArgumentType.floatArg(1.0F, 256.0F))
-                    .executes(ctx -> {
-                        debugPhasingViewDistance = FloatArgumentType.getFloat(ctx, "blocks");
-                        ctx.getSource().sendSuccess(() -> Component.literal("NeoOrigins phasing fog distance = " + debugPhasingViewDistance + " blocks"), false);
-                        return 1;
-                    })))
-            .then(Commands.literal("fade")
-                .then(Commands.argument("multiplier", FloatArgumentType.floatArg(0.0F, 0.99F))
-                    .executes(ctx -> {
-                        phasingTerrainFadeStart = FloatArgumentType.getFloat(ctx, "multiplier");
-                        ctx.getSource().sendSuccess(() -> Component.literal("NeoOrigins phasing fog fade start = " + phasingTerrainFadeStart), false);
-                        return 1;
-                    })))
-            .then(Commands.literal("color")
-                .then(Commands.argument("value", FloatArgumentType.floatArg(0.0F, 1.0F))
-                    .executes(ctx -> {
-                        phasingFogColor = FloatArgumentType.getFloat(ctx, "value");
-                        ctx.getSource().sendSuccess(() -> Component.literal("NeoOrigins phasing fog color = " + phasingFogColor), false);
-                        return 1;
-                    })))
-            .then(Commands.literal("status")
-                .executes(ctx -> {
-                    ctx.getSource().sendSuccess(() -> Component.literal(
-                        "NeoOrigins phasing fog: distance="
-                            + (debugPhasingViewDistance == null ? "power default" : debugPhasingViewDistance + " blocks")
-                            + ", fade=" + phasingTerrainFadeStart
-                            + ", color=" + phasingFogColor
-                            + ", dhSuppressed=" + distantHorizonsRenderingSuppressed), false);
-                    return 1;
-                }))
-            .then(Commands.literal("reset")
-                .executes(ctx -> {
-                    debugPhasingViewDistance = null;
-                    phasingTerrainFadeStart = DEFAULT_PHASING_TERRAIN_FADE_START;
-                    phasingFogColor = DEFAULT_PHASING_FOG_COLOR;
-                    ctx.getSource().sendSuccess(() -> Component.literal("NeoOrigins phasing fog debug values reset"), false);
-                    return 1;
-                })));
-    }
-
-    @SubscribeEvent
     public static void onRenderFog(ViewportEvent.RenderFog event) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null) return;
@@ -152,7 +101,7 @@ public final class VisualEffectsHandler {
         PhasingVisual phasing = currentPhasingVisual();
         if (applyPhasingFog(event.getCamera(), event.getMode(), phasing)) {
             float end = phasing.viewDistance();
-            float start = event.getMode() == FogRenderer.FogMode.FOG_SKY ? PHASING_FOG_START : end * phasingTerrainFadeStart;
+            float start = event.getMode() == FogRenderer.FogMode.FOG_SKY ? PHASING_FOG_START : end * DEFAULT_PHASING_TERRAIN_FADE_START;
             if (event.getMode() == FogRenderer.FogMode.FOG_SKY) {
                 end *= 1.0F;
             }
@@ -190,9 +139,9 @@ public final class VisualEffectsHandler {
             return;
         }
 
-        event.setRed(phasingFogColor);
-        event.setGreen(phasingFogColor);
-        event.setBlue(phasingFogColor);
+        event.setRed(DEFAULT_PHASING_FOG_COLOR);
+        event.setGreen(DEFAULT_PHASING_FOG_COLOR);
+        event.setBlue(DEFAULT_PHASING_FOG_COLOR);
     }
 
     @SubscribeEvent
@@ -241,7 +190,7 @@ public final class VisualEffectsHandler {
         }
 
         float end = phasing.viewDistance();
-        float start = fogMode == FogRenderer.FogMode.FOG_SKY ? PHASING_FOG_START : end * phasingTerrainFadeStart;
+        float start = fogMode == FogRenderer.FogMode.FOG_SKY ? PHASING_FOG_START : end * DEFAULT_PHASING_TERRAIN_FADE_START;
         if (fogMode == FogRenderer.FogMode.FOG_SKY) {
             end *= 1.0F;
         }
@@ -271,7 +220,7 @@ public final class VisualEffectsHandler {
         if (data == null) {
             boolean phasing = ClientActivePowers.hasCapability("phantom_phase")
                 || ClientActivePowers.hasCapability("wall_phase");
-            return phasing ? new PhasingVisual(debugDistanceOr(DEFAULT_PHASING_VIEW_DISTANCE)) : null;
+            return phasing ? new PhasingVisual(DEFAULT_PHASING_VIEW_DISTANCE) : null;
         }
 
         float viewDistance = DEFAULT_PHASING_VIEW_DISTANCE;
@@ -280,11 +229,7 @@ public final class VisualEffectsHandler {
         try {
             viewDistance = Float.parseFloat(encodedDistance);
         } catch (NumberFormatException ignored) {}
-        return new PhasingVisual(debugDistanceOr(viewDistance));
-    }
-
-    private static float debugDistanceOr(float viewDistance) {
-        return debugPhasingViewDistance == null ? viewDistance : debugPhasingViewDistance;
+        return new PhasingVisual(viewDistance);
     }
 
     public static boolean hasPhasingFog() {
