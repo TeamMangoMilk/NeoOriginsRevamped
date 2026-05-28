@@ -55,7 +55,7 @@ public final class NeoOriginsConfig {
 
     private static final String[] BUILT_IN_ORIGINS = {
         "human", "merling", "avian", "blazeling", "elytrian", "enderian",
-        "arachnid", "shulk", "phantom", "specter", "feline", "golem", "caveborn",
+        "arachnid", "shulk", "phantom", "spectre", "feline", "golem", "caveborn",
         "sylvan", "draconic", "revenant", "tiny", "abyssal", "voidwalker",
         "stoneguard", "verdant", "umbral", "inchling", "sporeling",
         "frostborn", "strider", "siren", "piglin", "hiveling", "cinderborn",
@@ -311,19 +311,19 @@ public final class NeoOriginsConfig {
         p("phantom_hunger_over_time");  f("exhaustion_per_tick", 0.0406, 0, 10); ep();
         p("phantom_fragile");           f("amount", -6.0, -100, 100); ep();
 
-        // Specter
-        p("specter_elytra_boost");      f("strength", 1.0, 0, 10); fi("cooldown_ticks", 200, 0, 72000); ep();
-        p("specter_moon_armor");        fi("amplifier", 0, 0, 4); ep();
-        p("specter_soul_drain");        f("heal_amount", 2.0, 0, 100); ep();
-        p("specter_sunburn");           f("damage_per_second", 1.5, 0, 100); fb("ignite", true); ep();
-        p("specter_daylight_weakness"); f("amount", -0.25, -10, 10); ep();
-        p("specter_fragile");           f("amount", -4.0, -100, 100); ep();
-        p("specter_evolved_hp");        f("amount", 2.0, -100, 100); ep();
-        p("specter_ascended_hp");       f("amount", 4.0, -100, 100); ep();
-        p("specter_ascended_speed");    f("amount", 0.1, -1, 10); ep();
-        p("specter_apex_hp");           f("amount", 6.0, -100, 100); ep();
-        p("specter_apex_daylight");     f("damage_per_second", 1.0, 0, 100); fb("ignite", true); ep();
-        p("specter_apex_spectral_dodge");f("chance", 0.1, 0, 1); ep();
+        // Spectre
+        p("spectre_elytra_boost");      f("strength", 1.0, 0, 10); fi("cooldown_ticks", 200, 0, 72000); ep();
+        p("spectre_moon_armor");        fi("amplifier", 0, 0, 4); ep();
+        p("spectre_soul_drain");        f("heal_amount", 2.0, 0, 100); ep();
+        p("spectre_sunburn");           f("damage_per_second", 1.5, 0, 100); fb("ignite", true); ep();
+        p("spectre_daylight_weakness"); f("amount", -0.25, -10, 10); ep();
+        p("spectre_fragile");           f("amount", -4.0, -100, 100); ep();
+        p("spectre_evolved_hp");        f("amount", 2.0, -100, 100); ep();
+        p("spectre_ascended_hp");       f("amount", 4.0, -100, 100); ep();
+        p("spectre_ascended_speed");    f("amount", 0.1, -1, 10); ep();
+        p("spectre_apex_hp");           f("amount", 6.0, -100, 100); ep();
+        p("spectre_apex_daylight");     f("damage_per_second", 1.0, 0, 100); fb("ignite", true); ep();
+        p("spectre_apex_spectral_dodge");f("chance", 0.1, 0, 1); ep();
 
         // ── Piglin ──
         p("piglin_attack_bonus");       f("amount", 2.0, -100, 100); ep();

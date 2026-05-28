@@ -11,7 +11,7 @@
     "neoorigins:arachnid",
     "neoorigins:shulk",
     "neoorigins:phantom",
-    "neoorigins:specter",
+    "neoorigins:spectre",
     "neoorigins:feline",
     "neoorigins:golem",
     "neoorigins:caveborn",
@@ -58,3 +58,4 @@
   "hidden": false,
   "enabled": true
 }
+

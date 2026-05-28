@@ -9,7 +9,7 @@
   "origins.examplepack.spectre.description": "An ethereal being that slips between the living world and the void.",
 
   "origins.examplepack.paladin.name": "Paladin",
-  "origins.examplepack.paladin.description": "A holy warrior empowered by armor and the hunt for undead.",
+  "origins.examplepack.paladin.description": "A holy warrior empowered by armour and the hunt for undead.",
 
   "origins.examplepack.void_knight.name": "Void Knight",
   "origins.examplepack.void_knight.description": "A guardian of the End. Picking this origin warps you to an End City — and sends you back there on death if you have no bed.",
@@ -30,7 +30,7 @@
   "power.examplepack.pyromancer_water_weakness.description": "Takes 2.5x damage from water and drowning.",
 
   "power.examplepack.golem_armor.name": "Iron Skin",
-  "power.examplepack.golem_armor.description": "Has 6 points of natural armor without wearing equipment.",
+  "power.examplepack.golem_armor.description": "Has 6 points of natural armour without wearing equipment.",
 
   "power.examplepack.golem_slow_movement.name": "Heavy Frame",
   "power.examplepack.golem_slow_movement.description": "Moves 20% slower than a normal player.",
@@ -87,7 +87,7 @@
   "power.examplepack.paladin_holy_mark.description": "Undead you hit briefly glow with holy light.",
 
   "power.examplepack.void_knight_end_ward.name": "End Ward",
-  "power.examplepack.void_knight_end_ward.description": "Grants +2 armor while in The End.",
+  "power.examplepack.void_knight_end_ward.description": "Grants +2 armour while in The End.",
 
   "origins.examplepack.netherborn.name": "Netherborn",
   "origins.examplepack.netherborn.description": "Forged in infernal fire. Spawns at a Nether Fortress with a fire-aspect blade and cooked rations.",

@@ -4,7 +4,7 @@
   "origins": [
     "examplepack:pyromancer",
     "examplepack:golem",
-    "examplepack:specter",
+    "examplepack:spectre",
     "examplepack:paladin",
     "examplepack:void_knight",
     "examplepack:netherborn",
@@ -16,3 +16,4 @@
   "hidden": false,
   "enabled": true
 }
+

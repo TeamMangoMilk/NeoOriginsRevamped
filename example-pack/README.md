@@ -18,10 +18,10 @@ your Minecraft game folder.
 | Origin | Showcases |
 |---|---|
 | **Pyromancer** | `prevent_action` (fire), `persistent_effect` (night vision), `modify_damage` (in / out), `attribute_modifier` (strength) |
-| **Golem** | `attribute_modifier` (armor + speed), `prevent_action` (fall), `effect_immunity`, `no_slowdown`, `scare_entities` |
-| **Specter** | `flight`, `elytra_boost`, `phantom_form`, `water_breathing`, `wall_climbing`, `scare_entities`, `conditional` gate |
+| **Golem** | `attribute_modifier` (armour + speed), `prevent_action` (fall), `effect_immunity`, `no_slowdown`, `scare_entities` |
+| **Spectre** | `flight`, `elytra_boost`, `phantom_form`, `water_breathing`, `wall_climbing`, `scare_entities`, `conditional` gate |
 | **Paladin** | `attribute_modifier` with `equipment_condition` (helmet-gated), `action_on_hit` (self-heal vs undead), `action_on_hit` (apply-effect to target) |
-| **Void Knight** | `spawn_location` to a specific structure (End City on pick + bed-less respawn), `attribute_modifier` with `location_condition` (End-only armor) |
+| **Void Knight** | `spawn_location` to a specific structure (End City on pick + bed-less respawn), `attribute_modifier` with `location_condition` (End-only armour) |
 | **Netherborn** | `spawn_location` to the Nether with a structure filter (fortress), **stacked `starting_equipment` powers** (Fire Aspect sword + 8 porkchops), `condition_passive` biome aura |
 | **Tidecaller** | `spawn_location` with `biome_tag` + `allow_ocean_floor`, `starting_equipment` (Loyalty trident), `condition_passive` water aura |
 | **Hearth Keeper** | Pure `starting_equipment` showcase — three stacked grants (bread, seeds, saplings) with no custom spawn, plus `crop_growth_accelerator` |
@@ -93,7 +93,7 @@ cancelled origin pick doesn't consume the grant.
 example-pack/
   pack.mcmeta
   data/examplepack/origins/
-    origins/         pyromancer.json, golem.json, specter.json, paladin.json,
+    origins/         pyromancer.json, golem.json, spectre.json, paladin.json,
                      void_knight.json, netherborn.json, tidecaller.json, hearth_keeper.json
     powers/          one file per power (~40)
     origin_layers/   examplepack.json   (adds all eight to a separate tab)
@@ -107,7 +107,7 @@ example-pack/
   inside conditions and actions. Legacy `neoorigins:*` still works but emits
   a `[2.0-legacy]` deprecation warning — see
   [docs/MIGRATION.md](../docs/MIGRATION.md).
-- Specter bundles `specter_no_fall_base` + `specter_conditional_fall` to
+- Spectre bundles `spectre_no_fall_base` + `spectre_conditional_fall` to
   demonstrate the `neoorigins:conditional` gate pattern.
 - Display text lives in `assets/examplepack/lang/en_us.json` using the
   `power.<namespace>.<power_id>.name` convention. Power JSONs reference
@@ -115,3 +115,4 @@ example-pack/
 - See [docs/COOKBOOK.md](../docs/COOKBOOK.md) for recipe-oriented patterns,
   [docs/POWER_TYPES.md](../docs/POWER_TYPES.md) for the full field
   reference, and [docs/API.md](../docs/API.md) for the flat verb index.
+

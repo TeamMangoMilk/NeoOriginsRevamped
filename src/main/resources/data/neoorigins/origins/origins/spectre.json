@@ -1,0 +1,52 @@
+{
+  "name": "origins.neoorigins.spectre.name",
+  "description": "origins.neoorigins.spectre.description",
+  "icon": "minecraft:phantom_membrane",
+  "impact": "high",
+  "order": 10,
+  "powers": [
+    "neoorigins:spectre_night_vision",
+    "neoorigins:spectre_flight",
+    "neoorigins:spectre_elytra_boost",
+    "neoorigins:spectre_moon_armor",
+    "neoorigins:spectre_soul_drain",
+    "neoorigins:spectre_no_fall",
+    "neoorigins:spectre_sunburn",
+    "neoorigins:spectre_daylight_weakness",
+    "neoorigins:spectre_fragile",
+    "neoorigins:spectre_no_sleep"
+  ],
+  "upgrades": [],
+  "tier_powers": [
+    {
+      "tier": 1,
+      "add": [
+        "neoorigins:spectre_evolved_hp"
+      ],
+      "remove": []
+    },
+    {
+      "tier": 2,
+      "add": [
+        "neoorigins:spectre_ascended_hp",
+        "neoorigins:spectre_ascended_speed"
+      ],
+      "remove": [
+        "neoorigins:spectre_evolved_hp"
+      ]
+    },
+    {
+      "tier": 3,
+      "add": [
+        "neoorigins:spectre_apex_hp",
+        "neoorigins:spectre_apex_daylight",
+        "neoorigins:spectre_apex_spectral_dodge"
+      ],
+      "remove": [
+        "neoorigins:spectre_ascended_hp",
+        "neoorigins:spectre_sunburn"
+      ]
+    }
+  ]
+}
+

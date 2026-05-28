@@ -487,7 +487,7 @@ Wraps another power so it only applies when a movement condition is met. The inn
 {
   "type": "neoorigins:conditional",
   "condition": "climbing",
-  "inner_power": "examplepack:specter_no_fall_base",
+  "inner_power": "examplepack:spectre_no_fall_base",
   "name": "Spider's Grip",
   "description": "Takes no fall damage while clinging to walls."
 }
@@ -3170,3 +3170,4 @@ Individual 2.0 power types are intentionally narrow so they can be combined. For
 - `neoorigins:condition_passive` with `condition: { type: origins:target_in_set, set: mypack:kill_list }` and `entity_action: { type: neoorigins:heal, amount: 0.5 }` — heals when attacking a marked target
 
 Each piece is a separate power entry in the origin's `powers` array. The `entity_set` power carries no behaviour on its own — it's the shared name other powers read and write.
+

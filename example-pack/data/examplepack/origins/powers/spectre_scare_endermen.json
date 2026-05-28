@@ -1,0 +1,7 @@
+{
+  "type": "neoorigins:scare_entities",
+  "entity_types": ["minecraft:enderman"],
+  "name": "power.examplepack.spectre_scare_endermen.name",
+  "description": "power.examplepack.spectre_scare_endermen.description"
+}
+

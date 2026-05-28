@@ -1,0 +1,21 @@
+{
+  "name": "origins.examplepack.spectre.name",
+  "description": "origins.examplepack.spectre.description",
+  "icon": "minecraft:phantom_membrane",
+  "impact": "high",
+  "order": 12,
+  "powers": [
+    "examplepack:spectre_flight",
+    "examplepack:spectre_elytra_boost",
+    "examplepack:spectre_phantom_form",
+    "examplepack:spectre_water_breathing",
+    "examplepack:spectre_no_sprint_food",
+    "examplepack:spectre_wall_climbing",
+    "examplepack:spectre_scare_endermen",
+    "examplepack:spectre_tick_action",
+    "examplepack:spectre_no_fall_base",
+    "examplepack:spectre_conditional_fall"
+  ],
+  "upgrades": []
+}
+

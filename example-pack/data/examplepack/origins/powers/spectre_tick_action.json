@@ -1,0 +1,8 @@
+{
+  "type": "neoorigins:tick_action",
+  "interval": 40,
+  "action_type": "teleport_on_damage",
+  "name": "power.examplepack.spectre_tick_action.name",
+  "description": "power.examplepack.spectre_tick_action.description"
+}
+
