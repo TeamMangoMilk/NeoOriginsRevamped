@@ -19,16 +19,25 @@ import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
+import net.minecraft.Util;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.commands.arguments.ResourceLocationArgument;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.NbtAccounter;
+import net.minecraft.nbt.NbtIo;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.level.storage.LevelResource;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.TreeMap;
 
 /**
@@ -115,11 +124,16 @@ public class OriginCommand {
                             .executes(OriginCommand::executeSet)))))
             .then(Commands.literal("reset")
                 .requires(cs -> cs.hasPermission(2))
+                .then(Commands.literal("all")
+                    .executes(OriginCommand::executeResetAll))
                 .then(Commands.argument("player", EntityArgument.player())
                     .executes(ctx -> executeReset(ctx, null))
                     .then(Commands.argument("layer", ResourceLocationArgument.id())
                         .suggests(SUGGEST_LAYERS)
                         .executes(ctx -> executeReset(ctx, ResourceLocationArgument.getId(ctx, "layer"))))))
+            .then(Commands.literal("resetall")
+                .requires(cs -> cs.hasPermission(2))
+                .executes(OriginCommand::executeResetAll))
             .then(Commands.literal("list")
                 .requires(cs -> cs.hasPermission(2))
                 .executes(ctx -> executeList(ctx, null))
@@ -352,6 +366,91 @@ public class OriginCommand {
         ctx.getSource().sendSuccess(() -> Component.literal(
             "Reset " + player.getName().getString() + "'s origin for " + scope), true);
         return 1;
+    }
+
+    private static int executeResetAll(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        int online = 0;
+        for (ServerPlayer player : source.getServer().getPlayerList().getPlayers()) {
+            resetOnlinePlayerOrigins(player);
+            online++;
+        }
+        source.getServer().getPlayerList().saveAll();
+
+        int savedFiles;
+        try {
+            savedFiles = resetSavedPlayerOriginData(source.getServer().getWorldPath(LevelResource.PLAYER_DATA_DIR));
+        } catch (IOException exception) {
+            source.sendFailure(Component.literal(
+                "Reset online origins, but failed while editing saved playerdata: " + exception.getMessage()));
+            return online;
+        }
+
+        final int onlineCount = online;
+        final int savedFileCount = savedFiles;
+        source.sendSuccess(() -> Component.literal(
+            "Reset origins for " + onlineCount + " online player"
+                + (onlineCount == 1 ? "" : "s")
+                + " and updated " + savedFileCount + " saved playerdata file"
+                + (savedFileCount == 1 ? "" : "s") + "."), true);
+        return online + savedFiles;
+    }
+
+    private static void resetOnlinePlayerOrigins(ServerPlayer player) {
+        ActiveOriginService.revokeAllPowers(player);
+        player.getData(OriginAttachments.originData()).clear();
+        NeoOriginsNetwork.syncRegistryToPlayer(player);
+        NeoOriginsNetwork.syncToPlayer(player);
+        NeoOriginsNetwork.openSelectionScreen(player, false);
+    }
+
+    private static int resetSavedPlayerOriginData(Path playerDir) throws IOException {
+        if (!Files.isDirectory(playerDir)) return 0;
+        int changed = resetSavedPlayerOriginData(playerDir, ".dat");
+        changed += resetSavedPlayerOriginData(playerDir, ".dat_old");
+        return changed;
+    }
+
+    private static int resetSavedPlayerOriginData(Path playerDir, String suffix) throws IOException {
+        int changed = 0;
+        try (var paths = Files.list(playerDir)) {
+            for (Path path : paths
+                .filter(Files::isRegularFile)
+                .filter(p -> p.getFileName().toString().endsWith(suffix))
+                .toList()) {
+                if (resetSavedPlayerOriginDataFile(path)) changed++;
+            }
+        }
+        return changed;
+    }
+
+    private static boolean resetSavedPlayerOriginDataFile(Path path) throws IOException {
+        CompoundTag root = NbtIo.readCompressed(path, NbtAccounter.unlimitedHeap());
+        if (!root.contains("neoforge:attachments", Tag.TAG_COMPOUND)) return false;
+
+        CompoundTag attachments = root.getCompound("neoforge:attachments");
+        if (!attachments.contains("neoorigins:origin_data", Tag.TAG_COMPOUND)) return false;
+
+        CompoundTag originData = attachments.getCompound("neoorigins:origin_data");
+        originData.remove("origins");
+        originData.putBoolean("had_all_origins", false);
+        originData.remove("granted_equipment");
+        originData.remove("shadow_orbs");
+        originData.remove("toggled_off_powers");
+        originData.remove("dynamic_granted_powers");
+        originData.remove("entity_sets");
+
+        Path temp = Files.createTempFile(path.getParent(), path.getFileName().toString(), ".tmp");
+        try {
+            NbtIo.writeCompressed(root, temp);
+            Path backup = path.resolveSibling(path.getFileName().toString() + ".neoorigins_reset_old");
+            if (!Util.safeReplaceOrMoveFile(path, temp, backup, false)) {
+                throw new IOException("Could not replace " + path.getFileName());
+            }
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+        return true;
     }
 
     private static int executeList(CommandContext<CommandSourceStack> ctx, ResourceLocation layerId) {
