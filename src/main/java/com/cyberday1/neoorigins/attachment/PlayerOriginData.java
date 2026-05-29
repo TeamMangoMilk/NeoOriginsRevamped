@@ -153,6 +153,30 @@ public class PlayerOriginData {
         }
     }
 
+    /**
+     * Creates a respawn-safe copy of the data that is normally persisted by the
+     * codec. Session-only state such as cooldowns and pending picker commits is
+     * intentionally not copied, matching the serialize/deserialize copy path.
+     */
+    public PlayerOriginData copyForRespawn() {
+        PlayerOriginData copy = new PlayerOriginData();
+        copy.origins.putAll(this.origins);
+        copy.hadAllOrigins = this.hadAllOrigins;
+        copy.grantedEquipmentPowers.addAll(this.grantedEquipmentPowers);
+        copy.shadowOrbs.addAll(this.shadowOrbs);
+        copy.orbUseCount = this.orbUseCount;
+        copy.toggledOffPowers.addAll(this.toggledOffPowers);
+        copy.dynamicGrantedPowers.addAll(this.dynamicGrantedPowers);
+        for (var entry : this.entitySets.entrySet()) {
+            copy.entitySets.put(entry.getKey(), new LinkedHashSet<>(entry.getValue()));
+        }
+        copy.customFloats.putAll(this.customFloats);
+        copy.essenceKills = this.essenceKills;
+        copy.evolutionTier = this.evolutionTier;
+        copy.pickerAbandoned = this.pickerAbandoned;
+        return copy;
+    }
+
     // ── Custom float storage ───────────────────────────────────────────
 
     public float getCustomFloat(String key, float defaultValue) {

@@ -16,6 +16,7 @@ public class OriginAttachments {
         ATTACHMENT_TYPES.register("origin_data", () ->
             AttachmentType.builder(PlayerOriginData::new)
                 .serialize(PlayerOriginData.CODEC)
+                .copyHandler((data, holder, provider) -> data.copyForRespawn())
                 .copyOnDeath()
                 .build());
 

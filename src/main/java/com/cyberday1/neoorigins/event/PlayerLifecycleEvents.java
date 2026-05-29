@@ -425,6 +425,19 @@ public class PlayerLifecycleEvents {
     public static void onPlayerClone(PlayerEvent.Clone event) {
         if (!event.isWasDeath()) return;
         if (!(event.getEntity() instanceof ServerPlayer sp)) return;
+
+        PlayerOriginData copied = sp.getExistingDataOrNull(OriginAttachments.originData());
+        PlayerOriginData original = event.getOriginal().getExistingDataOrNull(OriginAttachments.originData());
+        if (original != null
+            && (copied == null || copied.getOrigins().isEmpty())
+            && (!original.getOrigins().isEmpty() || original.isHadAllOrigins())) {
+            sp.setData(OriginAttachments.originData(), original.copyForRespawn());
+            ActiveOriginService.invalidate(sp.getUUID());
+            NeoOrigins.LOGGER.warn(
+                "Restored {}'s origin data during death clone after the copied player had no origins",
+                sp.getName().getString());
+        }
+
         var stash = KEPT_STASH.remove(sp.getUUID());
         if (stash == null) return;
         for (var stack : stash) {
