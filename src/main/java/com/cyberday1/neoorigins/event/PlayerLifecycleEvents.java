@@ -104,11 +104,22 @@ public class PlayerLifecycleEvents {
     }
 
     private static void applyStoredPowersOnLogin(ServerPlayer sp) {
+        reapplyStoredPowers(sp, false);
+    }
+
+    private static void applyStoredPowersOnRespawn(ServerPlayer sp) {
+        reapplyStoredPowers(sp, true);
+    }
+
+    private static void reapplyStoredPowers(ServerPlayer sp, boolean respawnCallbacks) {
         repairCorruptedVitals(sp);
 
         ActiveOriginService.invalidate(sp.getUUID());
         com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(sp);
-        ActiveOriginService.forEach(sp, holder -> holder.onLogin(sp));
+        ActiveOriginService.forEach(sp, holder -> {
+            if (respawnCallbacks) holder.onRespawn(sp);
+            else holder.onLogin(sp);
+        });
         ActiveOriginService.reconcileAttributeModifiers(sp);
 
         // Clamp health to the possibly changed max.
@@ -237,8 +248,7 @@ public class PlayerLifecycleEvents {
             data.clear();
             assignRandomOrigins(sp);
         } else {
-            com.cyberday1.neoorigins.power.builtin.AttributeModifierPower.purgeAllOriginModifiers(sp);
-            ActiveOriginService.forEach(sp, holder -> holder.onRespawn(sp));
+            applyStoredPowersOnRespawn(sp);
             NeoOriginsNetwork.syncToPlayer(sp);
         }
         // modify_player_spawn — per-power respawn override. Runs before the
@@ -433,6 +443,8 @@ public class PlayerLifecycleEvents {
             && (!original.getOrigins().isEmpty() || original.isHadAllOrigins())) {
             sp.setData(OriginAttachments.originData(), original.copyForRespawn());
             ActiveOriginService.invalidate(sp.getUUID());
+            applyStoredPowersOnLogin(sp);
+            NeoOriginsNetwork.syncToPlayer(sp);
             NeoOrigins.LOGGER.warn(
                 "Restored {}'s origin data during death clone after the copied player had no origins",
                 sp.getName().getString());
