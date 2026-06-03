@@ -35,8 +35,10 @@ import net.neoforged.neoforge.event.entity.living.MobEffectEvent;
 @EventBusSubscriber(modid = NeoOrigins.MOD_ID)
 public class CombatPowerEvents {
 
-    /** Re-entry guard: prevents LongerPotionsPower from recursing into MobEffectEvent.Added. */
-    private static final ThreadLocal<Boolean> LENGTHENING_EFFECT = ThreadLocal.withInitial(() -> false);
+    // (Previously held a ThreadLocal re-entry guard for the longer-potions
+    // re-add path. Removed — the handler now mutates the incoming effect
+    // instance in place via update() instead of calling addEffect recursively,
+    // which sidesteps the race documented in onMobEffectAdded below.)
 
     // Filter-string caches for the hot matcher helpers below. Filter strings
     // come from pack JSON (ModifyDamagePower damage_type, ActionOnHit target_type,
@@ -235,11 +237,20 @@ public class CombatPowerEvents {
 
         if (!event.isCanceled()) {
             float amount = event.getAmount();
-            ActiveOriginService.forEach(sp, holder -> holder.onHit(sp, amount));
+            // Publish the HitTakenContext to ActionContextHolder so any
+            // bi-entity actions parsed in OriginsCompatPowerLoader.parseSelfActionWhenHit
+            // can read source.getEntity() back from inside CompatPower.onHit.
+            var hitCtx = new com.cyberday1.neoorigins.service.EventPowerIndex.HitTakenContext(amount, event.getSource());
+            Object prev = com.cyberday1.neoorigins.service.ActionContextHolder.set(hitCtx);
+            try {
+                ActiveOriginService.forEach(sp, holder -> holder.onHit(sp, amount));
+            } finally {
+                com.cyberday1.neoorigins.service.ActionContextHolder.restore(prev);
+            }
             com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
                 sp,
                 com.cyberday1.neoorigins.service.EventPowerIndex.Event.HIT_TAKEN,
-                new com.cyberday1.neoorigins.service.EventPowerIndex.HitTakenContext(amount, event.getSource()));
+                hitCtx);
             // thorns_aura moved to action_on_event with a damage_attacker
             // entity_action (reads HitTakenContext.amount × amount_ratio).
             // The HIT_TAKEN dispatch above runs any such powers.
@@ -527,7 +538,6 @@ public class CombatPowerEvents {
     @SubscribeEvent
     public static void onMobEffectAdded(MobEffectEvent.Added event) {
         if (!(event.getEntity() instanceof ServerPlayer sp)) return;
-        if (LENGTHENING_EFFECT.get()) return;
         MobEffectInstance inst = event.getEffectInstance();
         if (inst == null) return;
 
@@ -543,13 +553,22 @@ public class CombatPowerEvents {
         if (dMult != 1.0f || ampBoost != 0) {
             int newDuration = (int)(inst.getDuration() * dMult);
             int newAmplifier = inst.getAmplifier() + ampBoost;
-            LENGTHENING_EFFECT.set(true);
-            try {
-                sp.addEffect(new MobEffectInstance(inst.getEffect(), newDuration,
-                    newAmplifier, inst.isAmbient(), inst.isVisible()));
-            } finally {
-                LENGTHENING_EFFECT.set(false);
-            }
+            // MobEffectEvent.Added fires *before* vanilla LivingEntity#addEffect
+            // puts the instance into activeEffects (LivingEntity.java:956-958).
+            // Re-calling sp.addEffect(new MobEffectInstance(...)) from here would
+            // run the nested put first, then be overwritten by the outer call's
+            // put with the original (un-extended) instance — which is exactly
+            // what made the first-dose extension silently fail while subsequent
+            // doses worked through the merge/update path.
+            //
+            // Mutating `inst` in place via update() avoids the race entirely:
+            // vanilla's subsequent put() / update() sees the already-extended
+            // duration and stores it. MobEffectInstance.update only strengthens
+            // (longer duration, higher amplifier), so duration modifiers < 1.0
+            // or negative amp boosts are silently ignored — matches the
+            // longer_potions / amplifier_boost intent.
+            inst.update(new MobEffectInstance(inst.getEffect(), newDuration,
+                newAmplifier, inst.isAmbient(), inst.isVisible()));
         }
 
         // TamedPotionDiffusalPower — share positive effects to nearby tamed animals

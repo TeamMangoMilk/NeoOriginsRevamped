@@ -96,7 +96,11 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         "origins:freeze",               "apace:freeze",
         "origins:modify_harvest",       "apace:modify_harvest",
         "origins:recipe",               "apace:recipe",
-        "origins:prevent_game_event",   "apace:prevent_game_event"
+        "origins:prevent_game_event",   "apace:prevent_game_event",
+        // v2.1.4: translateExhaust returned a single set-op modifier (~268x
+        // food drain per tick); Route B handles it correctly as a periodic
+        // causeFoodExhaustion(amount) call.
+        "origins:exhaust",              "apace:exhaust"
     );
 
     private static final Set<String> MULTIPLE_META_KEYS = OriginsMultipleExpander.META_KEYS;
@@ -136,12 +140,20 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
 
     @Override
     protected void apply(Map<Identifier, JsonElement> data, ResourceManager rm, ProfilerFiller profiler) {
+        // Open a warning-collection session so parser failures dedupe into a
+        // single summary block instead of one WARN per occurrence. Closed
+        // (and the summary emitted) at the bottom of this method, with a
+        // try/finally fallback so a mid-loop throw can't leak the session.
+        CompatWarningCollector.beginSession();
+        try {
+
         // Clear event power state from the previous reload cycle
         CompatPlayerState.clearAll();
         ModifyCraftingRegistry.clearAll();
         ModifyFoodRegistry.clearAll();
         NumericModifierRegistry.clearAll();
         CompatAttachments.clearResourceMeta();
+        com.cyberday1.neoorigins.service.InlineRecipeRegistry.resetPending();
 
         // Inline-expand any origins:multiple entries so sub-power JSONs are accessible.
         Map<Identifier, JsonObject> expanded = inlineExpand(data);
@@ -189,7 +201,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                 }
             } catch (Exception e) {
                 String reason = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-                NeoOrigins.LOGGER.warn("[CompatB] Failed to load {} ({}): {}", id, type, reason);
+                CompatWarningCollector.recordPowerCompileFailure(id.toString(), type, reason);
                 CompatTranslationLog.fail(id, type + ": " + reason);
             }
         }
@@ -211,7 +223,19 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         injectWellKnownPowers(injected);
 
         PowerDataManager.INSTANCE.injectExternalPowers(injected);
+        // Flush the deduplicated parser-warning summary (if anything was
+        // collected) before the final injection-count line so the summary
+        // appears immediately above it in the log.
+        CompatWarningCollector.emitSummaryAndEndSession();
         NeoOrigins.LOGGER.info("[CompatB] Injected {} Route B powers", injected.size());
+        } finally {
+            // Defensive: if anything above threw, the session is still open
+            // and would silently swallow warnings for the rest of the JVM.
+            // Close it (no-op if already closed by the normal path).
+            if (CompatWarningCollector.isSessionActive()) {
+                CompatWarningCollector.emitSummaryAndEndSession();
+            }
+        }
     }
 
     private void injectWellKnownPowers(Map<Identifier, PowerHolder<?>> injected) {
@@ -254,7 +278,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             Map.entry("origins:pumpkin_hate",         () -> json("neoorigins:restrict_armor", "armor_class", "pumpkin")),
             Map.entry("origins:hotblooded",           () -> json("neoorigins:effect_immunity")),
             Map.entry("origins:water_vulnerability",  () -> json("neoorigins:condition_passive")),
-            Map.entry("origins:flame_particles",      () -> json("neoorigins:particle")),
+            Map.entry("origins:flame_particles",      () -> json("neoorigins:particle", "particle", "minecraft:flame")),
             Map.entry("origins:nether_spawn",         () -> json("neoorigins:spawn_location"))
         );
 
@@ -445,6 +469,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             case "origins:modify_harvest",             "apace:modify_harvest"             -> parseModifyHarvest(id, json);
             case "origins:recipe",                     "apace:recipe"                     -> parseRecipe(id, json);
             case "origins:prevent_game_event",         "apace:prevent_game_event"         -> parsePreventGameEvent(id, json);
+            case "origins:exhaust",                    "apace:exhaust"                    -> parseExhaust(id, json);
             default -> null;
         };
     }
@@ -1144,9 +1169,36 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         EntityAction action = json.has("entity_action")
             ? ActionParser.parse(json.getAsJsonObject("entity_action"), idStr)
             : EntityAction.noop();
-        // bientity_action is skipped (requires attacker reference).
+        // bientity_action: (actor=player, target=attacker). The attacker is
+        // resolved from HitTakenContext, which CombatPowerEvents publishes to
+        // ActionContextHolder around the onHit dispatch.
+        com.cyberday1.neoorigins.compat.action.BiEntityAction biAction = json.has("bientity_action")
+            ? com.cyberday1.neoorigins.compat.action.BiEntityActionParser.parse(
+                json.getAsJsonObject("bientity_action"), idStr)
+            : com.cyberday1.neoorigins.compat.action.BiEntityAction.noop();
+        int cooldown = json.has("cooldown") ? json.get("cooldown").getAsInt() : 0;
+        EntityCondition condition = json.has("condition")
+            ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr)
+            : EntityCondition.alwaysTrue();
         return CompatPower.Config.builder()
-            .onHit(action::execute)
+            .cooldownTicks(cooldown)
+            .onHit(player -> {
+                if (!condition.test(player)) return;
+                if (cooldown > 0) {
+                    PlayerOriginData data = player.getData(OriginAttachments.originData());
+                    if (data.isOnCooldown(idStr, player.tickCount)) return;
+                    data.setCooldown(idStr, player.tickCount, cooldown);
+                }
+                action.execute(player);
+                if (biAction != com.cyberday1.neoorigins.compat.action.BiEntityAction.NOOP) {
+                    Object ctx = com.cyberday1.neoorigins.service.ActionContextHolder.get();
+                    if (ctx instanceof com.cyberday1.neoorigins.service.EventPowerIndex.HitTakenContext hitCtx
+                            && hitCtx.source().getEntity() instanceof net.minecraft.world.entity.LivingEntity attacker
+                            && attacker != player) {
+                        biAction.execute(player, attacker);
+                    }
+                }
+            })
             .build();
     }
 
@@ -1186,6 +1238,33 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                         ? player.level().damageSources().magic()
                         : player.level().damageSources().generic();
                     player.hurt(dmgSrc, finalDamage);
+                }
+            })
+            .build();
+    }
+
+    private CompatPower.Config parseExhaust(Identifier id, JsonObject json) {
+        String idStr = id.toString();
+        int interval = Math.max(1, json.has("interval") ? json.get("interval").getAsInt() : 20);
+        float amount = json.has("exhaustion") ? json.get("exhaustion").getAsFloat()
+                     : json.has("amount")     ? json.get("amount").getAsFloat()
+                     : 0.1f;
+        CompatPolicy.resetFailClosedCount();
+        EntityCondition condition = json.has("condition")
+            ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr)
+            : EntityCondition.alwaysTrue();
+        if (CompatPolicy.failClosedCount() > 0) {
+            NeoOrigins.LOGGER.warn("[CompatB] exhaust {} has unsupported condition(s) — refusing to compile", idStr);
+            return null;
+        }
+        int offset = (idStr.hashCode() & Integer.MAX_VALUE) % interval;
+        float finalAmount = amount;
+        return CompatPower.Config.builder()
+            .onTick(player -> {
+                if (player.level().getServer() == null) return;
+                long tick = player.level().getServer().getTickCount();
+                if ((tick + offset) % interval == 0 && condition.test(player)) {
+                    player.causeFoodExhaustion(finalAmount);
                 }
             })
             .build();
@@ -1606,10 +1685,15 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr)
             : null;
 
-        // Parse optional entity_action to fire on jump
-        EntityAction jumpAction = json.has("entity_action")
+        // Parse optional entity_action to fire on jump. Previously this was
+        // parsed and stored in a local but never invoked — the jump-velocity
+        // boost (and any other configured action) silently no-op'd. Now
+        // registered with JumpActionRegistry on grant and unregistered on
+        // revoke; JumpEventHandler fires it from LivingJumpEvent.
+        EntityAction jumpAction = json.has("entity_action") && json.get("entity_action").isJsonObject()
             ? ActionParser.parse(json.getAsJsonObject("entity_action"), idStr)
             : EntityAction.noop();
+        boolean hasJumpAction = jumpAction != EntityAction.NOOP;
 
         if (condition != null) {
             // Conditioned: toggle modifier based on condition each tick
@@ -1626,9 +1710,15 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                         inst.removeModifier(modifierId);
                     }
                 })
+                .onGranted(player -> {
+                    if (hasJumpAction) com.cyberday1.neoorigins.service.JumpActionRegistry
+                        .register(player, idStr, jumpAction, condition);
+                })
                 .onRevoked(player -> {
                     AttributeInstance inst = player.getAttribute(jumpHolder);
                     if (inst != null) inst.removeModifier(modifierId);
+                    if (hasJumpAction) com.cyberday1.neoorigins.service.JumpActionRegistry
+                        .unregister(player, idStr);
                 })
                 .build();
         }
@@ -1637,15 +1727,18 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         return CompatPower.Config.builder()
             .onGranted(player -> {
                 AttributeInstance inst = player.getAttribute(jumpHolder);
-                if (inst == null) return;
-                if (inst.getModifier(modifierId) == null) {
+                if (inst != null && inst.getModifier(modifierId) == null) {
                     inst.addPermanentModifier(new AttributeModifier(
                         modifierId, finalValue, AttributeModifier.Operation.ADD_MULTIPLIED_BASE));
                 }
+                if (hasJumpAction) com.cyberday1.neoorigins.service.JumpActionRegistry
+                    .register(player, idStr, jumpAction, null);
             })
             .onRevoked(player -> {
                 AttributeInstance inst = player.getAttribute(jumpHolder);
                 if (inst != null) inst.removeModifier(modifierId);
+                if (hasJumpAction) com.cyberday1.neoorigins.service.JumpActionRegistry
+                    .unregister(player, idStr);
             })
             .build();
     }
@@ -1768,17 +1861,47 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
     }
 
     /**
-     * {@code origins:recipe} — unlocks a recipe for the player when the power
-     * is granted. Revokes the recipe when the power is revoked.
+     * {@code origins:recipe} — unlocks a recipe for the player when the
+     * power is granted. The {@code recipe} field may be either:
+     * <ul>
+     *   <li>A string id pointing to an existing registered recipe — the
+     *       original behavior, the power just calls {@code awardRecipes}.</li>
+     *   <li>An inline recipe JSON object (full {@code type} + {@code ingredients}
+     *       + {@code result} shape). The inline recipe is registered via
+     *       {@link com.cyberday1.neoorigins.service.InlineRecipeRegistry}
+     *       under a synthesized id, then the power gates {@code awardRecipes}
+     *       on that id. Caveat: the recipe ends up globally craftable; the
+     *       inline form only controls recipe-book visibility, not the craft
+     *       gate. Most packs ship Origins-specific items as ingredients so
+     *       this matches their expected semantics anyway.</li>
+     * </ul>
      */
     private CompatPower.Config parseRecipe(Identifier id, JsonObject json) {
-        String recipeId = json.has("recipe") ? json.get("recipe").getAsString() : null;
-        if (recipeId == null) {
+        if (!json.has("recipe")) {
             NeoOrigins.LOGGER.debug("[CompatB] {}: origins:recipe missing 'recipe' field", id);
             return null;
         }
-
-        Identifier recipeLoc = Identifier.parse(recipeId);
+        JsonElement recipeEl = json.get("recipe");
+        final Identifier recipeLoc;
+        if (recipeEl.isJsonPrimitive()) {
+            recipeLoc = Identifier.tryParse(recipeEl.getAsString());
+            if (recipeLoc == null) {
+                NeoOrigins.LOGGER.warn("[CompatB] {}: origins:recipe has malformed recipe id '{}'",
+                    id, recipeEl.getAsString());
+                return null;
+            }
+        } else if (recipeEl.isJsonObject()) {
+            // Inline recipe: register under a synthesized id and treat as
+            // if the pack had shipped a separate recipe data file pointed to
+            // by that id. InlineRecipeRegistry handles the actual injection
+            // into RecipeManager once the datapack reload completes.
+            recipeLoc = com.cyberday1.neoorigins.service.InlineRecipeRegistry.syntheticId(id);
+            com.cyberday1.neoorigins.service.InlineRecipeRegistry.register(recipeLoc, recipeEl.getAsJsonObject());
+        } else {
+            NeoOrigins.LOGGER.warn("[CompatB] {}: origins:recipe 'recipe' field must be string id or inline object — got {}",
+                id, recipeEl);
+            return null;
+        }
 
         return CompatPower.Config.builder()
             .onGranted(player -> {
@@ -1790,6 +1913,9 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                 if (recipe.isPresent()) {
                     player.awardRecipes(java.util.List.of(recipe.get()));
                 }
+                // If recipe is empty (inline recipe injection hasn't run yet on
+                // this server start), the OnDatapackSyncEvent path will inject
+                // it shortly. Re-grant on next login or via /reload picks it up.
             })
             .onRevoked(player -> {
                 var server = player.level().getServer();
