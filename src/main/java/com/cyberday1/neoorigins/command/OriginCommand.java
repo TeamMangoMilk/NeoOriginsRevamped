@@ -51,7 +51,7 @@ public class OriginCommand {
 
     private static final SuggestionProvider<CommandSourceStack> SUGGEST_POWERS =
         (ctx, builder) -> SharedSuggestionProvider.suggestResource(
-            PowerDataManager.INSTANCE.getPowers().keySet(), builder);
+            PowerDataManager.INSTANCE.getAllPowers().keySet(), builder);
 
     private static final SuggestionProvider<CommandSourceStack> SUGGEST_MOB_ORIGINS =
         (ctx, builder) -> SharedSuggestionProvider.suggestResource(
@@ -173,7 +173,9 @@ public class OriginCommand {
                                         IntegerArgumentType.getInteger(ctx, "count"))))))))
                 .then(Commands.literal("reload")
                     .requires(REQUIRE_GM)
-                    .executes(ctx -> executeReload(ctx)));
+                    .executes(ctx -> executeReload(ctx)))
+                // ── Developer harness (permission 2) ──────────────────────────
+                .then(DebugCommand.build());
     }
 
     // ── Evolution commands ──────────────────────────────────────────────
@@ -331,6 +333,9 @@ public class OriginCommand {
         } else {
             data.clear();
         }
+        // revokeAllPowers cleared the global-power ledger; re-grant any matching
+        // global power sets so a reset doesn't strip apoli:global powers.
+        com.cyberday1.neoorigins.service.GlobalPowerService.reconcilePlayer(player);
 
         NeoOriginsNetwork.syncRegistryToPlayer(player);
         NeoOriginsNetwork.syncToPlayer(player);

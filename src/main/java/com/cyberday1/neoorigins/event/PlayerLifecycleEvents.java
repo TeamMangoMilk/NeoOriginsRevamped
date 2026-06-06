@@ -72,6 +72,12 @@ public class PlayerLifecycleEvents {
         ActiveOriginService.forEach(sp, holder -> holder.onTick(sp));
         com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
             sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.TICK);
+        // CLIMB fires each tick the player is on a climbable (ladder/vine).
+        // Action powers gate further with their own conditions / cooldowns.
+        if (sp.onClimbable()) {
+            com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
+                sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.CLIMB);
+        }
     }
 
     @SubscribeEvent
@@ -79,6 +85,10 @@ public class PlayerLifecycleEvents {
         if (!(event.getEntity() instanceof ServerPlayer sp)) return;
 
         repairCorruptedVitals(sp);
+
+        // Global power sets (apoli:global): grant/reconcile before onLogin so the
+        // freshly-granted powers receive their onLogin dispatch in the same pass.
+        com.cyberday1.neoorigins.service.GlobalPowerService.reconcilePlayer(sp);
 
         ActiveOriginService.forEach(sp, holder -> holder.onLogin(sp));
 
@@ -92,6 +102,7 @@ public class PlayerLifecycleEvents {
         NeoOriginsNetwork.syncRegistryToPlayer(sp);
         NeoOriginsNetwork.syncToPlayer(sp);
         NeoOriginsNetwork.syncEvolutionToPlayer(sp);
+        NeoOriginsNetwork.syncActiveThemeToPlayer(sp);
 
         if (LayerDataManager.INSTANCE.getSortedLayers().isEmpty()) {
             // Data hasn't loaded yet — defer the origin check to tick handler
@@ -163,7 +174,13 @@ public class PlayerLifecycleEvents {
      */
     @SubscribeEvent
     public static void onDatapackSync(OnDatapackSyncEvent event) {
-        event.getRelevantPlayers().forEach(NeoOriginsNetwork::syncRegistryToPlayer);
+        event.getRelevantPlayers().forEach(sp -> {
+            // Re-apply global power sets so a /reload that added or removed an
+            // apoli:global set immediately grants/revokes for online players.
+            com.cyberday1.neoorigins.service.GlobalPowerService.reconcilePlayer(sp);
+            NeoOriginsNetwork.syncRegistryToPlayer(sp);
+            NeoOriginsNetwork.syncActiveThemeToPlayer(sp);
+        });
     }
 
     @SubscribeEvent
@@ -265,6 +282,13 @@ public class PlayerLifecycleEvents {
     public static void onAdvancementEarned(AdvancementEvent.AdvancementEarnEvent event) {
         if (!(event.getEntity() instanceof ServerPlayer sp)) return;
         Identifier earnedId = event.getAdvancement().id();
+
+        // ADVANCEMENT_EARNED action — fires for every earned advancement so
+        // action_on_event powers can react. Folded into this existing handler
+        // (rather than a second subscriber) since earnedId is already resolved.
+        com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(sp,
+            com.cyberday1.neoorigins.service.EventPowerIndex.Event.ADVANCEMENT_EARNED,
+            new com.cyberday1.neoorigins.service.EventPowerIndex.AdvancementContext(earnedId));
 
         PlayerOriginData data = sp.getData(OriginAttachments.originData());
         // Snapshot before iteration — applyOriginPowers mutates the data map.

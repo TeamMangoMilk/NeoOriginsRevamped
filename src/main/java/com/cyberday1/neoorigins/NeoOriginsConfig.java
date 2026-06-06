@@ -10,13 +10,38 @@ import java.util.*;
 
 /**
  * NeoForge TOML config for NeoOrigins.
- * Stored at config/neoorigins-common.toml in the game directory.
+ *
+ * <p>This class owns two specs:
+ * <ul>
+ *   <li>{@link #SPEC} (COMMON, {@code config/neoorigins-common.toml}) — server-side
+ *       gameplay/tuning values consumed entirely on the logical server, most of
+ *       them at datapack-load time (power overrides, compat ratio, debug flags,
+ *       dimension restrictions, …). COMMON loads early enough to be readable
+ *       during the boot-time datapack reload; it is NOT network-synced, which is
+ *       fine because these values are baked into the power/origin data that is
+ *       synced separately.</li>
+ *   <li>{@link #SERVER_SPEC} (SERVER, {@code <world>/serverconfig/neoorigins-server.toml})
+ *       — gameplay toggles the client must observe: origin/class enable toggles
+ *       and the global resource-bar disable. NeoForge auto-syncs SERVER configs
+ *       to every connecting client, so disabling an origin server-side now
+ *       correctly hides it on remote clients. These values are only read after a
+ *       world is active, so the SERVER load-timing restriction does not bite.</li>
+ * </ul>
+ * Client-only display preferences live in {@code NeoOriginsClientConfig}.
  */
 public final class NeoOriginsConfig {
 
     private NeoOriginsConfig() {}
 
     public static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
+
+    /**
+     * Builder for the SERVER spec — values that must be synced to connecting
+     * clients (origin/class toggles, resource-bar disable). Kept separate from
+     * {@link #BUILDER} so the bulk of the config stays COMMON and readable during
+     * the boot-time datapack reload (SERVER configs are not loaded that early).
+     */
+    public static final ModConfigSpec.Builder SERVER_BUILDER = new ModConfigSpec.Builder();
 
     public static final ModConfigSpec.BooleanValue DEBUG_POWER_LOADING =
         BUILDER
@@ -33,15 +58,8 @@ public final class NeoOriginsConfig {
     /** Convenience accessor for hot-path checks. */
     public static boolean isDebugCompatActions() { return DEBUG_COMPAT_ACTIONS.get(); }
 
-    public static final ModConfigSpec.BooleanValue HIDE_HUD_BARS =
-        BUILDER
-            .comment("Hide hunger / air HUD bars for origins that don't consume them",
-                     "(e.g. Automaton hunger, Merling / Kraken / Automaton air).",
-                     "Turn off to keep vanilla bars visible regardless of origin.")
-            .define("hide_hud_bars", true);
-
     public static final ModConfigSpec.BooleanValue DISABLE_RESOURCE_BARS =
-        BUILDER
+        SERVER_BUILDER
             .comment("Disable all resource bars (mana, stamina, rage, etc.) globally.",
                      "When true, resource bars are hidden from the HUD and any active",
                      "power that would normally cost a resource falls back to costing",
@@ -69,7 +87,7 @@ public final class NeoOriginsConfig {
     public static final Map<String, ModConfigSpec.BooleanValue> ORIGIN_TOGGLES;
 
     static {
-        BUILDER.comment(
+        SERVER_BUILDER.comment(
             "Enable or disable built-in origins.",
             "Set to false to hide an origin from the selection screen.",
             "Disabled origins can still be assigned via /neoorigins set.",
@@ -78,10 +96,10 @@ public final class NeoOriginsConfig {
 
         Map<String, ModConfigSpec.BooleanValue> toggles = new LinkedHashMap<>();
         for (String name : BUILT_IN_ORIGINS) {
-            toggles.put(name, BUILDER.define(name, true));
+            toggles.put(name, SERVER_BUILDER.define(name, true));
         }
         ORIGIN_TOGGLES = Collections.unmodifiableMap(toggles);
-        BUILDER.pop();
+        SERVER_BUILDER.pop();
     }
 
     // ── Disabled Classes ────────────────────────────────────────────────
@@ -100,7 +118,7 @@ public final class NeoOriginsConfig {
     public static final Map<String, ModConfigSpec.BooleanValue> CLASS_TOGGLES;
 
     static {
-        BUILDER.comment(
+        SERVER_BUILDER.comment(
             "Enable or disable built-in classes.",
             "Set to false to remove a class from the selection screen.",
             "If all classes are disabled, the class selection screen is skipped entirely."
@@ -108,10 +126,10 @@ public final class NeoOriginsConfig {
 
         Map<String, ModConfigSpec.BooleanValue> toggles = new LinkedHashMap<>();
         for (String name : BUILT_IN_CLASSES) {
-            toggles.put(name, BUILDER.define(name, true));
+            toggles.put(name, SERVER_BUILDER.define(name, true));
         }
         CLASS_TOGGLES = Collections.unmodifiableMap(toggles);
-        BUILDER.pop();
+        SERVER_BUILDER.pop();
     }
 
     // ── Dimension Power Restrictions ────────────────────────────────────
@@ -488,6 +506,7 @@ public final class NeoOriginsConfig {
 
     // ── Orb of Origins ──────────────────────────────────────────────────
     public static final ModConfigSpec.IntValue ORB_LEVELS_PER_USE;
+    public static final ModConfigSpec.BooleanValue ORB_SCALE_COST;
 
     static {
         BUILDER.comment(
@@ -495,16 +514,24 @@ public final class NeoOriginsConfig {
             "Controls XP cost behaviour when a player uses an Orb of Origin."
         ).push("orb_of_origins");
 
+        ORB_SCALE_COST = BUILDER
+            .comment("Whether the XP cost scales with the number of prior orb uses.",
+                     "true  (default): Cost = levels_per_use * previous orb uses (first use free, then ramps).",
+                     "false: flat cost — every use (including the first) costs exactly levels_per_use levels.")
+            .define("scale_cost", true);
+
         ORB_LEVELS_PER_USE = BUILDER
-            .comment("XP levels charged per prior orb use.",
-                     "Cost = this value * number of previous orb uses.",
-                     "First use is always free. Set to 0 to disable XP cost entirely.")
+            .comment("XP levels charged per orb use.",
+                     "When scale_cost=true:  Cost = this value * number of previous orb uses (first use free).",
+                     "When scale_cost=false: Cost = this value, flat, on every use.",
+                     "Set to 0 to disable XP cost entirely.")
             .defineInRange("levels_per_use", 5, 0, 1000);
 
         BUILDER.pop();
     }
 
     public static int orbLevelsPerUse() { return ORB_LEVELS_PER_USE.get(); }
+    public static boolean orbScaleCost() { return ORB_SCALE_COST.get(); }
 
     // ── Auto-Human Mode ───────────────────────────────────────────────
     public static final ModConfigSpec.BooleanValue AUTO_HUMAN;
@@ -897,7 +924,57 @@ public final class NeoOriginsConfig {
     public static ConsentMode mountConsentMode() { return MOUNT_CONSENT_MODE.get(); }
     public static int mountRequestTimeoutSeconds() { return MOUNT_REQUEST_TIMEOUT_SECONDS.get(); }
 
+    // ── Command-power blacklist ─────────────────────────────────────────
+    // Datapack powers can run arbitrary server commands (the `command`/
+    // `execute_command` actions, the raycast command_along_ray/command_at_hit
+    // extensions, and the `command` condition). Without a guard, a pack could
+    // ship `/op @s` and silently escalate any player to operator. This list
+    // names command roots that are refused at execution time regardless of the
+    // power's permission level. Matching is case-insensitive on the effective
+    // command root, and `execute ... run <cmd>` is unwrapped so a blacklisted
+    // command can't be smuggled behind an execute chain.
+
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> COMMAND_POWER_BLACKLIST;
+
+    static {
+        BUILDER.comment(
+            "Commands that NeoOrigins powers are NEVER allowed to run.",
+            "Applies to the command/execute_command actions, the raycast",
+            "command_along_ray and command_at_hit extensions, and the command",
+            "condition. A blocked command is refused and logged instead of run.",
+            "Match is case-insensitive on the command root; `execute ... run X`",
+            "is unwrapped so X is what gets checked. List the root only (no slash)."
+        ).push("command_powers");
+
+        COMMAND_POWER_BLACKLIST = BUILDER
+            .comment("Command roots forbidden from power execution.")
+            .defineList("command_power_blacklist",
+                List.of("op", "deop", "ban", "ban-ip", "pardon", "pardon-ip",
+                        "kick", "whitelist", "stop", "save-all", "save-off",
+                        "save-on", "setidletimeout", "debug", "perf", "datapack",
+                        "reload"),
+                obj -> obj instanceof String);
+
+        BUILDER.pop();
+    }
+
+    /**
+     * True if the given command root is blacklisted from power execution.
+     * {@code root} should already be the unwrapped, slash-stripped first token
+     * (see {@code CommandPowerGuard.extractRoot}); matching is case-insensitive.
+     */
+    public static boolean isCommandPowerBlocked(String root) {
+        if (root == null || root.isEmpty()) return false;
+        for (String blocked : COMMAND_POWER_BLACKLIST.get()) {
+            if (blocked.equalsIgnoreCase(root)) return true;
+        }
+        return false;
+    }
+
     public static final ModConfigSpec SPEC = BUILDER.build();
+
+    /** SERVER spec — origin/class toggles + resource-bar disable, auto-synced to clients. */
+    public static final ModConfigSpec SERVER_SPEC = SERVER_BUILDER.build();
 
     public static RandomMode getRandomMode() {
         return RANDOM_MODE.get();
@@ -909,13 +986,6 @@ public final class NeoOriginsConfig {
     private static volatile Map<String, Set<ResourceKey<Level>>> parsedRestrictions;
     private static volatile int lastConfigHash;
     private static volatile int restrictionsVersionCounter;
-
-    /**
-     * Returns true if the given power ID is restricted in the player's current dimension.
-     */
-    public static boolean isHideHudBarsEnabled() {
-        return HIDE_HUD_BARS.get();
-    }
 
     public static boolean isResourceBarsDisabled() {
         return DISABLE_RESOURCE_BARS.get();

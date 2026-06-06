@@ -47,12 +47,23 @@ public final class EventPowerIndex {
         RESPAWN,
         TICK,
         DIMENSION_CHANGE,
+        CLIMB,
         JUMP,
         PROJECTILE_HIT,         // projectile owned by the player hit something
 
         // ----- Origins-Classes hooks: actions -----
+        CRAFT_ITEM,             // item crafted in a crafting table / inventory
+        SMELT_ITEM,             // item removed from furnace / smoker output
+        ENCHANT_ITEM,           // enchantment applied at enchanting table
+        ANVIL_REPAIR,           // anvil repair / combine
+        BONEMEAL,               // bonemeal applied
+        BREED,                  // breeding produced a baby
+        TAME,                   // entity was tamed
         FOOD_EATEN,             // (misnomer — fires at use START, cancellable; used for food_restriction)
         FOOD_FINISHED,          // player actually finished eating a food item (post-eat, non-cancellable)
+        ADVANCEMENT_EARNED,
+        TRADE_COMPLETED,        // villager trade finished
+        VILLAGER_INTERACT,      // right-click villager
 
         // ----- Origin / power lifecycle -----
         GAINED,                 // power was just granted to the player
@@ -75,9 +86,12 @@ public final class EventPowerIndex {
         // ----- Origins-Classes hooks: modifiers (return a float) -----
         MOD_EXHAUSTION,         // hunger drain multiplier
         MOD_NATURAL_REGEN,      // natural heal amount multiplier
+        MOD_TRADE_PRICE,        // villager trade cost multiplier
+        MOD_CRAFT_AMOUNT,       // crafting output count multiplier
         MOD_ENCHANT_LEVEL,      // enchanting table level multiplier / bonus
         MOD_HARVEST_DROPS,      // extra drops multiplier on break/drops
         MOD_TELEPORT_RANGE,     // ender pearl / teleport distance
+        MOD_FALL_DAMAGE,        // fall damage multiplier
         MOD_KNOCKBACK,          // incoming knockback strength multiplier
         MOD_POTION_DURATION,    // added-effect duration multiplier
         MOD_ANVIL_COST,         // anvil repair / combine XP cost multiplier
@@ -292,6 +306,33 @@ public final class EventPowerIndex {
 
     /** Context for breed / tame events. */
     public record EntityInteractContext(net.minecraft.world.entity.LivingEntity target) {}
+
+    /**
+     * Dispatch context naming a non-actor <em>Entity</em> that should act as the
+     * origin of a sub-action — published by {@code selector_action} for each
+     * entity its vanilla selector resolved. Unlike {@link EntityInteractContext}
+     * (which is {@link net.minecraft.world.entity.LivingEntity}-typed and feeds the
+     * bientity {@code target_action} chain), this carries a bare {@link net.minecraft.world.entity.Entity}
+     * so non-living origins such as {@code area_effect_cloud} can be the source of a
+     * {@code fire_projectile} (the Toxophilite hyper_multishot AEC-rotation trick).
+     * The actor (power holder) still arrives as the {@code EntityAction} arg; this
+     * only redirects the spatial origin/rotation.
+     */
+    public record SourceEntityContext(net.minecraft.world.entity.Entity sourceEntity) {}
+
+    /**
+     * Dispatch context for a <em>block</em> impact — the block on the other side
+     * of a projectile/raycast interaction. Sibling of {@link EntityInteractContext}
+     * (the entity equivalent) on the same {@link ActionContextHolder} seam. The
+     * block-target verbs ({@code strip}/{@code till}/{@code path}/{@code grow}/
+     * {@code transform_block}) and the {@code block_target_action} wrapper resolve
+     * it via {@link com.cyberday1.neoorigins.compat.action.ActionParser#extractBlockTarget}.
+     * Carries the {@link net.minecraft.server.level.ServerLevel} and the impacted
+     * {@link net.minecraft.core.BlockPos}; the actor arrives separately as the
+     * {@code EntityAction}/{@code BlockTargetAction} arg.
+     */
+    public record BlockHitContext(net.minecraft.server.level.ServerLevel level,
+                                  net.minecraft.core.BlockPos pos) {}
 
     /** Context for trade events. */
     public record TradeContext(net.minecraft.world.item.trading.MerchantOffer offer) {}

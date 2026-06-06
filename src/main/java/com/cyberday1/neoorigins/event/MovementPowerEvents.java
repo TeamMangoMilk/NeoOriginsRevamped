@@ -33,17 +33,29 @@ public class MovementPowerEvents {
         }
         com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
             sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.LAND, event.getDistance());
+        // MOD_FALL_DAMAGE scales the fall-damage multiplier. Chains on the
+        // event's current multiplier so it stacks with feather-falling etc.
+        float fallMult = com.cyberday1.neoorigins.service.EventPowerIndex.dispatchModifier(
+            sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.MOD_FALL_DAMAGE,
+            event, event.getDamageMultiplier());
+        if (fallMult != event.getDamageMultiplier()) {
+            if (!Float.isFinite(fallMult)) fallMult = 0f;
+            event.setDamageMultiplier(Math.max(0f, fallMult));
+        }
     }
 
-    // BreakSpeedModifierPower used to be handled here via PlayerEvent.BreakSpeed,
-    // but that event fires client-side for the local player and the
-    // ServerPlayer guard silently filtered every call → mining speed never
-    // applied. Powers now use the vanilla player.block_break_speed attribute,
-    // which auto-syncs to the client. See BreakSpeedModifierPower.
+    // BreakSpeedModifierPower used to share the vanilla player.block_break_speed
+    // attribute, but that attribute is global and cannot honour its block_tag
+    // filter, so it moved (back) to PlayerEvent.BreakSpeed in
+    // BreakSpeedModifierEvents — handled on BOTH sides (the earlier ServerPlayer
+    // guard that silently ate the client-side call is exactly what that handler
+    // avoids). See BreakSpeedModifierPower / BreakSpeedModifierEvents.
     //
-    // TODO: UnderwaterMiningSpeedPower is still broken for the same reason —
-    // it has a positional condition (in water + airborne) that attribute
-    // modifiers can't express, so it needs a client-aware fix.
+    // UnderwaterMiningSpeedPower ("aqua affinity") is NOT handled here either: it
+    // uses the vanilla minecraft:submerged_mining_speed attribute (auto-syncs to
+    // the client), which vanilla only applies while the eye is in water — so a
+    // permanent modifier raising it to 1.0 is automatically positional and needs
+    // no event. See UnderwaterMiningSpeedPower.
 
     @SubscribeEvent
     public static void onEntityJoinLevel(EntityJoinLevelEvent event) {

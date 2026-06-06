@@ -1,3 +1,9 @@
+---
+title: Conditions
+parent: "DSL Reference"
+nav_order: 4
+---
+
 # NeoOrigins 2.0 Condition Reference
 
 Conditions evaluate to true/false against an entity (usually the power's owning player). They gate power activation, `action_on_event` triggers, `conditional` wrappers, bientity interactions, and — as of v2.0.20 — **any power type** via the universal condition gate.
@@ -165,7 +171,7 @@ True while horizontal delta-movement is nonzero. No fields.
 
 ## `neoorigins:in_rain`
 
-True when rain is falling at the entity's block position (server-side only).
+True when rain is falling at the entity's block position with sky access (server-side only); returns false while mounted. If **Vampires Need Umbrellas** is installed, holding an umbrella in either hand or a Curios slot blocks the rain entirely (mirroring `exposed_to_sun`), so rain/water-damage origins like Wet Fur and True Hydrophobia stop hurting while you carry one.
 
 ## `neoorigins:daytime`
 
@@ -462,6 +468,8 @@ Numeric comparison against a named resource power's stored value.
 | `resource` | resource location | yes | — | Power ID storing the resource |
 | `comparison` | string | no | `">="` | Comparison operator |
 | `compare_to` | int | no | `0` | Threshold |
+
+> ⚠️ `resource` must be the **full** namespaced power ID (e.g. `mypack:thorns/resource`). Unlike `power_active`, the `*:` / `*:*` self-reference wildcard is **not** resolved here — a reference containing `*` silently reads as `0` (and is warned about at load). The same applies to the `change_resource` / `set_resource` actions.
 
 ## `neoorigins:power_active`
 

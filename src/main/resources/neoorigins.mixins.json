@@ -21,7 +21,11 @@
     "EntityIgnoreWaterMixin",
     "LivingEntityWalkOnFluidMixin",
     "PlayerPhaseOverrideMixin",
-    "EntityMountPositionMixin"
+    "EntityMountPositionMixin",
+    "AbstractVillagerTradePriceMixin",
+    "CraftingMenuCraftAmountMixin",
+    "recipe.CraftingMenuOriginContextMixin",
+    "recipe.RecipeManagerReplaceMixin"
   ],
   "client": [
     "client.LightTextureMixin",

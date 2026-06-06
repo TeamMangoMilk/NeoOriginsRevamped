@@ -1,3 +1,9 @@
+---
+title: API Overview
+parent: "DSL Reference"
+nav_order: 1
+---
+
 # NeoOrigins 2.0 API Reference
 
 Single landing page for the NeoOrigins datapack API. Every power type,
@@ -6,10 +12,10 @@ to the per-topic detail doc.
 
 - [Layer model](#layer-model)
 - [Documents in this API](#documents-in-this-api)
-- [Power types](#power-types) — 84 types
-- [Condition verbs](#condition-verbs) — 75 conditions
-- [Action verbs](#action-verbs) — 45 actions
-- [Event keys](#event-keys) — 33 events
+- [Power types](#power-types) — 99 types
+- [Condition verbs](#condition-verbs) — 93 conditions
+- [Action verbs](#action-verbs) — 64 actions
+- [Event keys](#event-keys) — 48 events
 - [Namespaces & prefixes](#namespaces--prefixes)
 - [JSON schemas](#json-schemas)
 
@@ -58,6 +64,7 @@ The upstream layer — for cross-mod pack compatibility — is handled by
 | [COOKBOOK.md](COOKBOOK.md) | Recipe-oriented tutorial — 10 common patterns. |
 | [PACK_FORMAT.md](PACK_FORMAT.md) | Directory layout, file-name conventions, JSON boilerplate. |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | How powers are loaded, dispatched, cached. For debugging. |
+| [COMPATIBILITY.md](COMPATIBILITY.md) | Out-of-the-box mod integrations (Origins/Apoli, Curios, Ars Nouveau, KubeJS, JEI/REI, etc.). |
 
 If a prose doc disagrees with the code, the code wins. Source of truth
 paths are cross-linked in each detail doc.
@@ -304,20 +311,23 @@ Used in `action_on_event`'s `event` field. Case-insensitive.
 
 ### Core lifecycle & combat
 `ATTACK` • `HIT_TAKEN` • `KILL` • `DEATH` • `BLOCK_BREAK` • `BLOCK_PLACE` •
-`ITEM_USE` • `RESPAWN` • `TICK` • `DIMENSION_CHANGE` • `JUMP` • `PROJECTILE_HIT`
+`ITEM_USE` • `RESPAWN` • `TICK` • `DIMENSION_CHANGE` • `CLIMB` • `JUMP` •
+`PROJECTILE_HIT`
 
 ### Interactions
-`BONEMEAL` • `FOOD_EATEN` • `BLOCK_USE` • `ENTITY_USE` • `ITEM_PICKUP` •
-`ITEM_USE_FINISH`
+`CRAFT_ITEM` • `SMELT_ITEM` • `ENCHANT_ITEM` • `ANVIL_REPAIR` • `BONEMEAL` •
+`BREED` • `TAME` • `FOOD_EATEN` • `FOOD_FINISHED` • `ADVANCEMENT_EARNED` •
+`TRADE_COMPLETED` • `VILLAGER_INTERACT` • `BLOCK_USE` • `ENTITY_USE` •
+`ITEM_PICKUP` • `ITEM_USE_FINISH` • `EFFECT_APPLIED`
 
 ### Origin & power lifecycle
 `GAINED` • `LOST` • `CHOSEN` • `WAKE_UP` • `LAND`
 
 ### Modifiers (return a float, chain in registration order)
-`MOD_EXHAUSTION` • `MOD_NATURAL_REGEN` • `MOD_ENCHANT_LEVEL` •
-`MOD_HARVEST_DROPS` • `MOD_TELEPORT_RANGE` • `MOD_KNOCKBACK` •
-`MOD_POTION_DURATION` • `MOD_ANVIL_COST` • `MOD_CRAFTED_FOOD_SATURATION` •
-`MOD_BONEMEAL_EXTRA`
+`MOD_EXHAUSTION` • `MOD_NATURAL_REGEN` • `MOD_TRADE_PRICE` • `MOD_CRAFT_AMOUNT` •
+`MOD_ENCHANT_LEVEL` • `MOD_HARVEST_DROPS` • `MOD_TELEPORT_RANGE` •
+`MOD_FALL_DAMAGE` • `MOD_KNOCKBACK` • `MOD_POTION_DURATION` • `MOD_ANVIL_COST` •
+`MOD_CRAFTED_FOOD_SATURATION` • `MOD_BONEMEAL_EXTRA`
 
 See [EVENTS.md](EVENTS.md) for each event's context record.
 

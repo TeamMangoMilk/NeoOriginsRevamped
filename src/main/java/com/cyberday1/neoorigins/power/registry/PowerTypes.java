@@ -91,6 +91,9 @@ public class PowerTypes {
     public static final DeferredHolder<PowerType<?>, CropGrowthAcceleratorPower> CROP_GROWTH_ACCELERATOR = reg("crop_growth_accelerator", new CropGrowthAcceleratorPower());
     public static final DeferredHolder<PowerType<?>, CropHarvestBonusPower>    CROP_HARVEST_BONUS   = reg("crop_harvest_bonus",   new CropHarvestBonusPower());
     public static final DeferredHolder<PowerType<?>, StartingEquipmentPower>   STARTING_EQUIPMENT   = reg("starting_equipment",   new StartingEquipmentPower());
+    // v2.1.6 backlog #3 — loot-table-driven active grant (FTBQ soft-compat
+    // available via FtbQuestsCompat when ftbquests is on the mod list).
+    public static final DeferredHolder<PowerType<?>, LootPoolGrantPower>       LOOT_POOL_GRANT      = reg("loot_pool_grant",      new LootPoolGrantPower());
 
     // --- Tick-driven & conditional ---
     // 2.0 Phase 4 consolidation target: condition_passive collapses biome_buff,
@@ -107,6 +110,8 @@ public class PowerTypes {
     public static final DeferredHolder<PowerType<?>, KeepInventoryPower>       KEEP_INVENTORY       = reg("keep_inventory",       new KeepInventoryPower());
     public static final DeferredHolder<PowerType<?>, ModifyPlayerSpawnPower>   MODIFY_PLAYER_SPAWN  = reg("modify_player_spawn",  new ModifyPlayerSpawnPower());
     public static final DeferredHolder<PowerType<?>, EdibleItemPower>          EDIBLE_ITEM          = reg("edible_item",          new EdibleItemPower());
+    // Display-only marker (origins:simple equivalent) — no behavior; carries name+description only.
+    public static final DeferredHolder<PowerType<?>, SimplePower>              SIMPLE               = reg("simple",               new SimplePower());
 
     // --- Origins Classes power types ---
     public static final DeferredHolder<PowerType<?>, ExhaustionFilterPower>      EXHAUSTION_FILTER      = reg("exhaustion_filter",      new ExhaustionFilterPower());
@@ -134,6 +139,9 @@ public class PowerTypes {
     public static final DeferredHolder<PowerType<?>, SneakyPower>                SNEAKY                 = reg("sneaky",                 new SneakyPower());
     public static final DeferredHolder<PowerType<?>, StealthPower>               STEALTH                = reg("stealth",                new StealthPower());
     public static final DeferredHolder<PowerType<?>, TreeFellingPower>           TREE_FELLING           = reg("tree_felling",           new TreeFellingPower());
+    // Soft-dep on ftbultimine — marker power; the FtbUltimineCompat bridge gates
+    // FTB Ultimine vein-mining to active holders. Inert when ftbultimine is absent.
+    public static final DeferredHolder<PowerType<?>, UltiminePower>              ULTIMINE               = reg("ultimine",               new UltiminePower());
     public static final DeferredHolder<PowerType<?>, CraftAmountBonusPower>      CRAFT_AMOUNT_BONUS     = reg("craft_amount_bonus",     new CraftAmountBonusPower());
     public static final DeferredHolder<PowerType<?>, TamedAnimalBoostPower>      TAMED_ANIMAL_BOOST     = reg("tamed_animal_boost",     new TamedAnimalBoostPower());
     public static final DeferredHolder<PowerType<?>, TamedPotionDiffusalPower>   TAMED_POTION_DIFFUSAL  = reg("tamed_potion_diffusal",  new TamedPotionDiffusalPower());

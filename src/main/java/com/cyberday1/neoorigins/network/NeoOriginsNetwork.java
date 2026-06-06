@@ -19,6 +19,7 @@ import com.cyberday1.neoorigins.network.payload.OpenOriginScreenPayload;
 import com.cyberday1.neoorigins.network.payload.SyncActivePowersPayload;
 import com.cyberday1.neoorigins.network.payload.SyncCooldownPayload;
 import com.cyberday1.neoorigins.network.payload.SyncEvolutionConfigPayload;
+import com.cyberday1.neoorigins.network.payload.SyncEvolutionProgressPayload;
 import com.cyberday1.neoorigins.network.payload.SyncMoisturePayload;
 import com.cyberday1.neoorigins.network.payload.SyncResourcePayload;
 import com.cyberday1.neoorigins.network.payload.SyncOriginRegistryPayload;
@@ -130,6 +131,12 @@ public class NeoOriginsNetwork {
         );
 
         registrar.playToClient(
+            SyncEvolutionProgressPayload.TYPE,
+            SyncEvolutionProgressPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleSyncEvolutionProgress
+        );
+
+        registrar.playToClient(
             SyncActivePowersPayload.TYPE,
             SyncActivePowersPayload.STREAM_CODEC,
             NeoOriginsNetwork::handleSyncActivePowers
@@ -151,6 +158,18 @@ public class NeoOriginsNetwork {
             com.cyberday1.neoorigins.network.payload.CreatorResultPayload.TYPE,
             com.cyberday1.neoorigins.network.payload.CreatorResultPayload.STREAM_CODEC,
             NeoOriginsNetwork::handleCreatorResult
+        );
+
+        registrar.playToClient(
+            com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload.TYPE,
+            com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleOriginTemplates
+        );
+
+        registrar.playToClient(
+            com.cyberday1.neoorigins.network.payload.SyncActiveThemePayload.TYPE,
+            com.cyberday1.neoorigins.network.payload.SyncActiveThemePayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleSyncActiveTheme
         );
 
         registrar.playToServer(
@@ -323,6 +342,26 @@ public class NeoOriginsNetwork {
         );
     }
 
+    private static void handleSyncActiveTheme(
+            com.cyberday1.neoorigins.network.payload.SyncActiveThemePayload payload, IPayloadContext ctx) {
+        if (net.neoforged.fml.loading.FMLEnvironment.getDist() != net.neoforged.api.distmarker.Dist.CLIENT) return;
+        ctx.enqueueWork(() -> {
+            String raw = payload.themeId();
+            Identifier id = (raw == null || raw.isEmpty()) ? null : Identifier.tryParse(raw);
+            com.cyberday1.neoorigins.client.theme.ActiveThemeRegistry.setServerDeclared(id);
+        });
+    }
+
+    /**
+     * Push the datapack-declared active UI theme to one player. The sentinel
+     * empty string means "no datapack declared a theme — fall back to default".
+     */
+    public static void syncActiveThemeToPlayer(ServerPlayer player) {
+        Identifier id = com.cyberday1.neoorigins.data.ActiveThemeManager.INSTANCE.getSelected();
+        PacketDistributor.sendToPlayer(player,
+            new com.cyberday1.neoorigins.network.payload.SyncActiveThemePayload(id == null ? "" : id.toString()));
+    }
+
     private static void handleSyncEvolutionConfig(SyncEvolutionConfigPayload payload, IPayloadContext ctx) {
         ctx.enqueueWork(() ->
             com.cyberday1.neoorigins.client.ClientEvolutionConfig.sync(
@@ -330,6 +369,24 @@ public class NeoOriginsNetwork {
                 payload.tier3Kills(), payload.messageInterval(),
                 payload.currentKills(), payload.currentTier())
         );
+    }
+
+    private static void handleSyncEvolutionProgress(SyncEvolutionProgressPayload payload, IPayloadContext ctx) {
+        ctx.enqueueWork(() ->
+            com.cyberday1.neoorigins.client.ClientEvolutionConfig.updateProgress(
+                payload.kills(), payload.tier())
+        );
+    }
+
+    /**
+     * Lightweight live-progress packet sent on every kill. Carries only the
+     * mutable (kills, tier) pair -- the static config travels via
+     * {@link #syncEvolutionToPlayer(ServerPlayer)} on login and reload.
+     */
+    public static void syncEvolutionProgressToPlayer(ServerPlayer sp) {
+        PlayerOriginData data = sp.getData(OriginAttachments.originData());
+        PacketDistributor.sendToPlayer(sp,
+            new SyncEvolutionProgressPayload(data.getEssenceKills(), data.getEvolutionTier()));
     }
 
     /**
@@ -379,6 +436,15 @@ public class NeoOriginsNetwork {
         );
     }
 
+    private static void handleOriginTemplates(
+            com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload payload, IPayloadContext ctx) {
+        // Same dedicated-server dist-cleaner guard as handleOpenEditorScreen.
+        if (net.neoforged.fml.loading.FMLEnvironment.getDist() != net.neoforged.api.distmarker.Dist.CLIENT) return;
+        ctx.enqueueWork(() ->
+            com.cyberday1.neoorigins.client.ClientTemplateCache.setFromJson(payload.json())
+        );
+    }
+
     /**
      * Shared open path for the 2.1 creator (command + keybind). Gate-checked by
      * the caller; syncs registry/state then asks the client to open the screen
@@ -388,6 +454,13 @@ public class NeoOriginsNetwork {
     public static void openCreatorFor(ServerPlayer sp) {
         syncRegistryToPlayer(sp);
         syncToPlayer(sp);
+        // Ship the template bundle BEFORE OpenEditorScreenPayload so the
+        // picker's first render has data — payloads inside a single tick are
+        // ordered, so the client receives them in this order.
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(sp,
+            new com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload(
+                com.cyberday1.neoorigins.service.OriginTemplates.toJson(
+                    com.cyberday1.neoorigins.service.OriginTemplates.collect())));
         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(sp, new OpenEditorScreenPayload());
     }
 
@@ -1042,6 +1115,9 @@ public class NeoOriginsNetwork {
         data.incrementOrbUseCount();
         data.resetEvolution();
         data.setPendingOrbCommit(false);
+        // revokeAllPowers cleared the global-power ledger; re-grant matching
+        // global power sets so an orb reset preserves apoli:global powers.
+        com.cyberday1.neoorigins.service.GlobalPowerService.reconcilePlayer(sp);
     }
 
     private static void shrinkOrbFromInventory(ServerPlayer sp) {

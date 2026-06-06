@@ -45,8 +45,12 @@ public final class SchemaFormCheck {
             failures++;
         }
 
-        // 3. A known structured branch still resolves with fields.
-        String structuredSample = "neoorigins:attribute_modifier";
+        // 3. A known structured branch still resolves with fields. (Uses a power
+        //    that is NOT yet registered in BuiltinPowers — registering a power
+        //    collapses its schema branch, so the sample must be a still-branched
+        //    type; attribute_modifier, mob_behavior and persistent_effect moved to
+        //    the spec, so this points at particle, which keeps its schema branch.)
+        String structuredSample = "neoorigins:particle";
         if (!model.hasStructuredForm(structuredSample)) {
             System.out.println("[schema-check] FAIL  expected structured branch for "
                 + structuredSample);
@@ -126,13 +130,22 @@ public final class SchemaFormCheck {
         // 8. Condition/Action picker sources stay in sync with the parsers.
         failures += auditParserTypes(
             "src/main/java/com/cyberday1/neoorigins/compat/condition/ConditionParser.java",
-            "condition");
+            "condition",
+            com.cyberday1.neoorigins.compat.condition.BuiltinConditions.canonicalIds(),
+            com.cyberday1.neoorigins.compat.condition.BuiltinConditions.aliasIds());
         failures += auditParserTypes(
             "src/main/java/com/cyberday1/neoorigins/compat/action/ActionParser.java",
-            "action");
+            "action",
+            com.cyberday1.neoorigins.compat.action.BuiltinActions.canonicalIds(),
+            com.cyberday1.neoorigins.compat.action.BuiltinActions.aliasIds());
 
         // 9. Every form field of every power must have a description.
         failures += auditFieldDocs(model);
+
+        // 9b. BuiltinPowers field-specs must not drift from the power's Config
+        //     codec (the power analogue of auditParserTypes). Vacuously green
+        //     until powers are registered.
+        failures += auditPowerFieldSpecs(model);
 
         // 10. Action / condition schemas must also be packaged + parse, so the
         //     2.1 RefRow widget can render sub-forms when an entity_action /
@@ -141,6 +154,12 @@ public final class SchemaFormCheck {
             "action", "neoorigins:add_velocity");
         failures += auditAuxSchema(SchemaFormModel.CONDITION_RESOURCE_PATH,
             "condition", "neoorigins:in_water");
+        failures += auditAuxSchema(SchemaFormModel.BLOCK_CONDITION_RESOURCE_PATH,
+            "block_condition", "neoorigins:in_tag");
+        failures += auditAuxSchema(SchemaFormModel.ITEM_CONDITION_RESOURCE_PATH,
+            "item_condition", "neoorigins:enchantment");
+        failures += auditAuxSchema(SchemaFormModel.ITEM_ACTION_RESOURCE_PATH,
+            "item_action", "neoorigins:consume");
 
         System.out.printf("[schema-check] %d power types, %d structured branches, %d failures%n",
             types, model.structuredTypes().size(), failures);
@@ -177,7 +196,25 @@ public final class SchemaFormCheck {
      * set — so the creator's picker can never silently drift from what the
      * parser actually accepts. Returns the failure count.
      */
-    private static int auditParserTypes(String src, String label) {
+    private static int auditParserTypes(String src, String label, java.util.Set<String> descriptorIds) {
+        return auditParserTypes(src, label, descriptorIds, java.util.Set.of());
+    }
+
+    /**
+     * @param descriptorIds canonical migrated descriptor ids (each a distinct
+     *                       registry type that must appear in {@code KNOWN_TYPES}).
+     * @param aliasIds       alias ids — known synonyms that dispatch to a canonical
+     *                       verb. These are handled by the parser but are
+     *                       deliberately <em>not</em> separate types, so they are
+     *                       excluded from the {@code KNOWN_TYPES} parity check on
+     *                       both sides: their absence from {@code KNOWN_TYPES} is
+     *                       not a "missing arm", and a switch/case label for them
+     *                       is not an "unhandled id". The reported type total is
+     *                       {@code KNOWN_TYPES}'s size — aliases never inflate it.
+     */
+    private static int auditParserTypes(String src, String label,
+                                        java.util.Set<String> descriptorIds,
+                                        java.util.Set<String> aliasIds) {
         String text;
         try {
             text = java.nio.file.Files.readString(java.nio.file.Path.of(src));
@@ -185,11 +222,42 @@ public final class SchemaFormCheck {
             System.out.println("[schema-check] FAIL  cannot read " + src + ": " + e);
             return 1;
         }
-        // Switch arms — canonicalised to neoorigins:<name> like the parser does.
-        java.util.Set<String> fromSwitch = new java.util.TreeSet<>();
-        java.util.regex.Matcher m = java.util.regex.Pattern
-            .compile("case \"[a-z_]+:([a-z_]+)\"").matcher(text);
-        while (m.find()) fromSwitch.add("neoorigins:" + m.group(1));
+        // Verbs the parser actually handles = remaining switch arms (canonicalised
+        // to neoorigins:<name> like the parser does) ∪ migrated descriptor ids.
+        // As the registry refactor moves verbs off the switch onto registered
+        // descriptors, KNOWN_TYPES stays put while the case arm disappears — the
+        // descriptor set restores that verb here so the parity assertion holds.
+        //
+        // A switch arm may carry MULTIPLE labels: `case "a",\n "b" -> …`, where the
+        // trailing labels are synonyms dispatching to the same handler (e.g.
+        // ConditionParser's `case "neoorigins:xp_level",\n "neoorigins:xp_levels"`).
+        // Two distinct sets matter for parity:
+        //   • `primary`  — the FIRST label of each arm, plus migrated descriptor
+        //     ids. Every primary verb is a distinct picker entry, so each MUST be
+        //     in KNOWN_TYPES (the `missing` check).
+        //   • `handled`  — every label of every arm (primaries + synonyms). Nothing
+        //     in KNOWN_TYPES may name an id no arm handles (the `extra` check), but
+        //     a synonym appearing here lets a KNOWN_TYPES entry like `xp_levels`
+        //     be recognised as handled without forcing every synonym into the set.
+        // Matching the whole `case … ->` span (DOTALL) — rather than `case "…"`
+        // alone — is what lets continuation labels register as handled; scoping to
+        // that span avoids scooping up unrelated quoted ids (KNOWN_TYPES literal,
+        // parse-helper string args), keeping the parity check strict.
+        java.util.Set<String> primary = new java.util.TreeSet<>(descriptorIds);
+        java.util.Set<String> handled = new java.util.TreeSet<>(descriptorIds);
+        java.util.regex.Matcher arm = java.util.regex.Pattern
+            .compile("case\\s+(\"[a-z_]+:[a-z_]+\"(?:\\s*,\\s*\"[a-z_]+:[a-z_]+\")*)\\s*->",
+                java.util.regex.Pattern.DOTALL).matcher(text);
+        java.util.regex.Pattern labelPat = java.util.regex.Pattern.compile("\"[a-z_]+:([a-z_]+)\"");
+        while (arm.find()) {
+            java.util.regex.Matcher lbl = labelPat.matcher(arm.group(1));
+            boolean first = true;
+            while (lbl.find()) {
+                String id = "neoorigins:" + lbl.group(1);
+                handled.add(id);
+                if (first) { primary.add(id); first = false; }
+            }
+        }
 
         // The declared KNOWN_TYPES = Set.of( … ) literal block.
         java.util.Set<String> declared = new java.util.TreeSet<>();
@@ -202,10 +270,20 @@ public final class SchemaFormCheck {
             while (dm.find()) declared.add(dm.group(1));
         }
 
-        java.util.Set<String> missing = new java.util.TreeSet<>(fromSwitch);
+        // Alias ids are known synonyms, not separate types: drop them from every
+        // parity set so an alias never has to live in KNOWN_TYPES (and a leftover
+        // alias case label is not flagged as unhandled).
+        primary.removeAll(aliasIds);
+        handled.removeAll(aliasIds);
+        declared.removeAll(aliasIds);
+
+        // Every primary verb must be declared; nothing declared may be unhandled.
+        // (A KNOWN_TYPES synonym like xp_levels is in `handled` but not `primary`,
+        // so it satisfies the `extra` check without inflating `missing`.)
+        java.util.Set<String> missing = new java.util.TreeSet<>(primary);
         missing.removeAll(declared);
         java.util.Set<String> extra = new java.util.TreeSet<>(declared);
-        extra.removeAll(fromSwitch);
+        extra.removeAll(handled);
         int fails = 0;
         if (declared.isEmpty()) {
             System.out.println("[schema-check] FAIL  " + label
@@ -223,7 +301,7 @@ public final class SchemaFormCheck {
             fails++;
         }
         if (fails == 0) {
-            System.out.printf("[schema-check] %s picker: %d types, in sync with switch%n",
+            System.out.printf("[schema-check] %s picker: %d types, in sync with switch+descriptors%n",
                 label, declared.size());
         }
         return fails;
@@ -303,6 +381,208 @@ public final class SchemaFormCheck {
     }
 
     /**
+     * Drift guard for {@link com.cyberday1.neoorigins.power.registry.BuiltinPowers}
+     * — the power analogue of {@link #auditParserTypes}. Powers deserialize
+     * through their own {@code Codec<Config>} (untouched by the refactor); this
+     * proves the declarative {@code FieldSpec} metadata stays consistent with
+     * that codec's record shape, so the schema / doc / editor layer can never
+     * silently drift from what a power actually parses.
+     *
+     * <p>For every power registered in {@code BuiltinPowers}, resolves its
+     * {@code Config} record (via {@code PowerConfigClassResolver}, headless-safe
+     * off the carried {@code Class}) and asserts:
+     * <ol type="a">
+     *   <li>every {@code FieldSpec.name} maps to a record component
+     *       (camel→snake) — no spec for a field the codec doesn't have;</li>
+     *   <li>every non-internal record component has a spec OR is covered by the
+     *       reflection fallback (so dropping a field from the spec without a
+     *       reason is caught) — reported, not failed, since the fallback is a
+     *       legitimate safety net;</li>
+     *   <li>required-ness matches {@code Optional}-typedness wherever the codec
+     *       exposes it: an {@code Optional<>} component must not be modelled
+     *       {@code required(true)} (the only direction reflection can prove);</li>
+     *   <li>if a {@code power.schema.json} branch exists for the type, the spec
+     *       is consistent with it — every schema field name appears in the spec.</li>
+     * </ol>
+     *
+     * <p>Vacuously green with nothing registered. For marker-only powers (empty
+     * spec, {@code Config(String type)}) every clause holds trivially. Returns
+     * the failure count.
+     */
+    private static int auditPowerFieldSpecs(SchemaFormModel model) {
+        int fails = 0;
+        var descriptors = com.cyberday1.neoorigins.power.registry.BuiltinPowers.descriptors();
+        java.util.List<String> internal = List.of("type", "powerId");
+
+        for (var entry : descriptors.entrySet()) {
+            Identifier id = entry.getKey();
+            var spec = entry.getValue();
+            String typeId = id.toString();
+
+            Class<?> cfg = com.cyberday1.neoorigins.power.schemaform
+                .PowerConfigClassResolver.resolve(spec.powerClass());
+            if (cfg == null || !cfg.isRecord()) {
+                System.out.println("[schema-check] FAIL  power-spec " + typeId
+                    + ": no Config record resolved from " + spec.powerClass().getSimpleName());
+                fails++;
+                continue;
+            }
+
+            // Map snake-case JSON key → record component, for the declared specs.
+            java.util.Map<String, java.lang.reflect.RecordComponent> byJson =
+                new java.util.LinkedHashMap<>();
+            for (java.lang.reflect.RecordComponent rc : cfg.getRecordComponents()) {
+                byJson.put(camelToSnake(rc.getName()), rc);
+            }
+
+            // JSON key names (for the schema-branch parity check, clause d) and
+            // the resolved component snake-keys (for component existence/coverage,
+            // clauses a/b). They differ only for key-aliased specs: a FieldSpec
+            // whose JSON `name` (e.g. entity_action) is bound via `.boundTo(..)`
+            // to a differently-named component (e.g. action) — see
+            // FieldSpec.effectiveComponentName.
+            java.util.Set<String> declaredNames = new java.util.TreeSet<>();
+            java.util.Set<String> declaredComponents = new java.util.TreeSet<>();
+            for (com.cyberday1.neoorigins.compat.registry.FieldSpec fs : spec.fields()) {
+                declaredNames.add(fs.name());
+                fails += auditSpec(fs, typeId, byJson, declaredComponents);
+            }
+
+            // (b) every non-internal component should have a spec OR rely on the
+            //     reflection fallback. Only meaningful once the power declares at
+            //     least one field (an all-empty spec IS the marker/fallback case).
+            if (!spec.fields().isEmpty()) {
+                for (var jc : byJson.entrySet()) {
+                    String compName = jc.getValue().getName();
+                    if (internal.contains(compName)) continue;
+                    // Match on the resolved component snake-key (clause a), so a
+                    // key-aliased spec covers its component even though its JSON
+                    // name differs.
+                    if (!declaredComponents.contains(jc.getKey())) {
+                        System.out.println("[schema-check] WARN  power-spec " + typeId
+                            + ": component '" + jc.getKey() + "' has no FieldSpec"
+                            + " (relying on codec-reflection fallback)");
+                    }
+                }
+            }
+
+            // (d) schema branch (when present) must be covered by the spec — but
+            //     only check this once the power declares fields (an empty spec is
+            //     the not-yet-migrated/marker case and falls back to the schema).
+            if (!spec.fields().isEmpty() && model.hasStructuredForm(typeId)) {
+                // Root common fields (name/description/hidden) are merged into
+                // every branch's form by SchemaFormModel.parse; they are not
+                // per-power FieldSpecs, so exclude them from the coverage check.
+                java.util.Set<String> commonNames = new java.util.HashSet<>();
+                for (FormFieldSpec cf : model.commonFields()) commonNames.add(cf.name());
+                for (FormFieldSpec sf : model.formFor(typeId)) {
+                    if (sf.name().equals("type")) continue;
+                    if (commonNames.contains(sf.name())) continue;
+                    if (!declaredNames.contains(sf.name())) {
+                        System.out.println("[schema-check] FAIL  power-spec " + typeId
+                            + ": schema branch field '" + sf.name()
+                            + "' is missing from the FieldSpec list");
+                        fails++;
+                    }
+                }
+            }
+        }
+
+        System.out.printf("[schema-check] power field-specs: %d registered powers, %d failures%n",
+            descriptors.size(), fails);
+        return fails;
+    }
+
+    /**
+     * Audit a single {@link com.cyberday1.neoorigins.compat.registry.FieldSpec}
+     * against the given {@code byJson} component map, recording every resolved
+     * component snake-key into {@code declaredComponents} (so clause (b) sees it
+     * as covered). Returns the failure count contributed by this spec.
+     *
+     * <p>Three shapes:
+     * <ul>
+     *   <li><b>Virtual wrapper</b> ({@code fs.isVirtual()}): the wrapper itself
+     *       has NO backing component — skip clauses (a)/(c) for it and recurse
+     *       into its children against the SAME top-level {@code byJson} map
+     *       (children map to flat components via {@code .boundTo}).</li>
+     *   <li><b>Real OBJECT with children</b>: resolve the wrapper's own component
+     *       (clause a), then recurse children against that component-record's own
+     *       component map.</li>
+     *   <li><b>Leaf</b>: clauses (a) and (c), unchanged.</li>
+     * </ul>
+     */
+    private static int auditSpec(com.cyberday1.neoorigins.compat.registry.FieldSpec fs,
+                                 String typeId,
+                                 java.util.Map<String, java.lang.reflect.RecordComponent> byJson,
+                                 java.util.Set<String> declaredComponents) {
+        int fails = 0;
+
+        // Virtual wrapper: no own component. Skip (a)/(c) for the wrapper; recurse
+        // children against the SAME top-level component map.
+        if (fs.isVirtual()) {
+            for (var child : fs.children()) {
+                fails += auditSpec(child, typeId, byJson, declaredComponents);
+            }
+            return fails;
+        }
+
+        String componentKey = camelToSnake(fs.effectiveComponentName());
+        declaredComponents.add(componentKey);
+
+        // (a) the spec's field must map to a real record component — resolved via
+        // the key-alias (effectiveComponentName) when set, else by camel→snake-ing
+        // the JSON name itself.
+        java.lang.reflect.RecordComponent rc = byJson.get(componentKey);
+        if (rc == null) {
+            System.out.println("[schema-check] FAIL  power-spec " + typeId
+                + ": field '" + fs.name() + "' has no matching Config component"
+                + (fs.componentName() != null ? " (bound to '" + fs.componentName() + "')" : ""));
+            return fails + 1;
+        }
+        // (c) Optional-typed component must not be modelled required.
+        boolean optionalTyped = rc.getType() == java.util.Optional.class;
+        if (optionalTyped && fs.required()) {
+            System.out.println("[schema-check] FAIL  power-spec " + typeId
+                + ": field '" + fs.name() + "' is Optional<> in the codec but"
+                + " declared required(true)");
+            fails++;
+        }
+
+        // Real OBJECT with children: recurse into the sub-record's own component
+        // map. (Forward-compat; resource uses the virtual path above.)
+        if (!fs.children().isEmpty()) {
+            Class<?> sub = rc.getType();
+            if (sub.isRecord()) {
+                java.util.Map<String, java.lang.reflect.RecordComponent> subByJson =
+                    new java.util.LinkedHashMap<>();
+                for (java.lang.reflect.RecordComponent src : sub.getRecordComponents()) {
+                    subByJson.put(camelToSnake(src.getName()), src);
+                }
+                java.util.Set<String> subDeclared = new java.util.TreeSet<>();
+                for (var child : fs.children()) {
+                    fails += auditSpec(child, typeId, subByJson, subDeclared);
+                }
+            }
+        }
+        return fails;
+    }
+
+    /** camelCase → snake_case, mirroring {@code CodecFieldSpecExtractor.camelToSnake}. */
+    private static String camelToSnake(String s) {
+        StringBuilder b = new StringBuilder(s.length() + 4);
+        for (int i = 0; i < s.length(); i++) {
+            char ch = s.charAt(i);
+            if (Character.isUpperCase(ch)) {
+                if (i > 0) b.append('_');
+                b.append(Character.toLowerCase(ch));
+            } else {
+                b.append(ch);
+            }
+        }
+        return b.toString();
+    }
+
+    /**
      * Enforces that every form field of every registered power has a
      * description — from the schema branch or from {@code field_docs.json}.
      * Fails the build listing every undocumented {@code type.field} so the
@@ -345,6 +625,30 @@ public final class SchemaFormCheck {
             }
             String typeId = "neoorigins:" + id;
 
+            // A power registered in BuiltinPowers carries its field docs ON the
+            // FieldSpec (D2: doc lives on the spec that drives the form), so it
+            // is fully spec-driven — its field_docs.json entry has been
+            // collapsed. Source descriptions from the spec for those fields, so
+            // this gate keeps proving "every form field is documented" without
+            // the side-table. Non-registered powers fall back to field_docs.json.
+            java.util.Map<String, String> specDocs = new java.util.HashMap<>();
+            java.util.List<com.cyberday1.neoorigins.compat.registry.FieldSpec> declared =
+                com.cyberday1.neoorigins.power.registry.BuiltinPowers.fieldsFor(typeId);
+            if (declared != null) {
+                for (var fs : declared) {
+                    if (fs.description() != null && !fs.description().isBlank()) {
+                        specDocs.put(fs.name(), fs.description());
+                        // Also index by the resolved component snake-key so a
+                        // key-aliased field's doc is found whether the form
+                        // surfaces the author-facing JSON name (FormModel) or the
+                        // raw component name (the reflection fallback used here
+                        // once the schema branch is collapsed). For un-aliased
+                        // fields this key equals fs.name() — a harmless re-put.
+                        specDocs.put(camelToSnake(fs.effectiveComponentName()), fs.description());
+                    }
+                }
+            }
+
             java.util.List<FormFieldSpec> specs;
             boolean schemaBranch = model.hasStructuredForm(typeId);
             if (schemaBranch) {
@@ -358,7 +662,8 @@ public final class SchemaFormCheck {
             for (FormFieldSpec s : specs) {
                 if (s.name().equals("type")) continue;
                 totalFields++;
-                boolean ok = (schemaBranch && s.description() != null
+                boolean ok = specDocs.containsKey(s.name())
+                    || (schemaBranch && s.description() != null
                         && !s.description().isBlank())
                     || (docs.describe(typeId, s.name()) != null
                         && !docs.describe(typeId, s.name()).isBlank());
