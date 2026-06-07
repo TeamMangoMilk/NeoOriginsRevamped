@@ -1,0 +1,15 @@
+# The compat-verb golden master is byte-compared across the registry
+# migration (`./gradlew goldenMaster` then `git diff --exit-code compat-golden`).
+# The harness always writes LF; pin LF here so autocrlf can't normalize the
+# tracked blob to CRLF and make the byte-identical gate flap.
+compat-golden/compat-verbs.txt text eol=lf
+
+# docs/schema/*.json is regenerated headlessly (e.g. `./gradlew generatePowerSchema`)
+# with a fixed Gson pretty-printer + single trailing LF. Pin LF so Windows-dev
+# and Linux-CI bytes match and the byte-stable regeneration gate can't flap.
+docs/schema/*.json text eol=lf
+
+# website/static/schemas/*.json is a committed copy of docs/schema/*.json that the
+# editor-pages CI workflow re-copies then byte-checks (`git diff --exit-code`). Pin
+# LF to match the docs/schema source so autocrlf can't make the drift gate flap.
+website/static/schemas/*.json text eol=lf

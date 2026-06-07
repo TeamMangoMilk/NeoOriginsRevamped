@@ -25,7 +25,9 @@
     "PlayerPhaseOverrideMixin",
     "LivingEntityUndeadPotionMixin",
     "EntityMountPositionMixin",
-    "EntityMountEndMixin"
+    "EntityMountEndMixin",
+    "AbstractVillagerTradePriceMixin",
+    "recipe.CraftingMenuOriginContextMixin"
   ],
   "client": [
     "client.LightTextureMixin",

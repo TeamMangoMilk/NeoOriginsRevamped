@@ -13,6 +13,27 @@ If neither `name` nor `description` is present, NeoOrigins falls back to the lan
 
 ---
 
+## `neoorigins:simple`
+
+Does nothing. A display-only marker power — the direct equivalent of `origins:simple` from the original Origins mod.
+
+It has no gameplay effect, no capabilities, and no behavior. Its only purpose is to appear as an entry in the origin info panel so you can attach a `name` + `description` (the heading + body text every power carries) without also granting an ability. Use it for flavor text, lore lines, or to describe an effect that is implemented elsewhere (a mixin, datapack, command, or another mod).
+
+No additional fields beyond `name` and `description`.
+
+**Example:**
+```json
+{
+  "type": "neoorigins:simple",
+  "name": "Cold Blooded",
+  "description": "You feel the chill of the deep more keenly than others."
+}
+```
+
+> Imported `origins:simple` / `apace:simple` (and `origins:tooltip`) powers translate to this type automatically when no specific id-override applies, so their text still shows in the GUI.
+
+---
+
 ## `neoorigins:attribute_modifier`
 
 Adds or multiplies a player attribute while the origin is active. Optionally gated on an environment condition, an equipped-item condition, or both (AND).
@@ -308,7 +329,7 @@ Cancels the lethal blow instead of letting the player die. Faithful to Origins' 
   "type": "neoorigins:prevent_death",
   "damage_types": "fell_out_of_world",
   "invert": true,
-  "condition": { "type": "origins:sneaking" },
+  "condition": { "type": "neoorigins:sneaking" },
   "name": "Guarded Stance",
   "description": "Death cannot touch a braced body — the void still can."
 }
@@ -606,19 +627,23 @@ Multiplies knockback dealt or received.
 
 ---
 
-## `neoorigins:xp_gain_modifier`
+## `origins:modify_xp_gain`
 
-Multiplies experience points gained. Wired to `PlayerXpEvent.XpChange` via the `NumericModifierRegistry`. Uses Apoli modifier math (addition + multiply_base/multiply_total).
+Multiplies experience points gained. Wired to `PlayerXpEvent.XpChange` via the `NumericModifierRegistry`. Uses Apoli modifier math (`addition` / `multiply_base` / `multiply_total`).
+
+> **Use `origins:modify_xp_gain`, not `neoorigins:xp_gain_modifier`.** There is no native `neoorigins:` XP-gain type — the only working implementation is this Apoli compat (Route B) verb. A power whose `type` is unregistered is dropped entirely at load (its name and description vanish from the picker too), so the `neoorigins:xp_gain_modifier` name in older docs never worked.
+
+Takes an Apoli **modifier** (singular `modifier` object or plural `modifiers` array). Each entry is `{ "operation": ..., "value": ... }` (`value` may also be written `amount`).
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `multiplier` | float | no | `1.0` | XP gain multiplier |
+| `modifier` / `modifiers` | object / array | yes | — | Apoli modifier(s): `operation` (`addition`, `multiply_base`, `multiply_total`) + `value` |
 
-**Example:**
+**Example — gain 50% more XP:**
 ```json
 {
-  "type": "neoorigins:xp_gain_modifier",
-  "multiplier": 1.5,
+  "type": "origins:modify_xp_gain",
+  "modifier": { "operation": "multiply_base", "value": 0.5 },
   "name": "Quick Learner",
   "description": "Gains experience faster."
 }
@@ -1670,7 +1695,7 @@ The 2.0 generic event hook — fires an action and/or applies a float modifier w
 
 - Lifecycle: `GAINED`, `REVOKED`, `RESPAWN`, `GAMEMODE_CHANGE`
 - Combat: `KILL`, `HIT_TAKEN`, `DAMAGE_DEALT`, `MOD_KNOCKBACK`, `MOD_THORNS`
-- Food: `FOOD_EATEN`, `MOD_FOOD_NUTRITION`, `MOD_EXHAUSTION`, `MOD_NATURAL_REGEN`
+- Food: `FOOD_EATEN`, `FOOD_FINISHED`, `MOD_EXHAUSTION`, `MOD_NATURAL_REGEN`, `MOD_CRAFTED_FOOD_SATURATION`
 - Mining / crafting: `BLOCK_BREAK`, `CRAFT_ITEM`, `ITEM_USE_FINISH`, `MOD_BREAK_SPEED`, `MOD_CRAFT_COUNT`
 - XP / economy: `XP_GAINED`, `MOD_XP_GAIN`, `TRADE_COMPLETE`, `MOD_BONEMEAL_GROWTH`
 - Interaction: `BLOCK_INTERACT`, `ENTITY_INTERACT`, `RIGHT_CLICK_ITEM`
@@ -2026,6 +2051,13 @@ Generic cooldown-gated active (keybind) ability. Part of the 2.0 consolidation �
 
 Each `active_ability` power maintains an **independent cooldown**. Multiple active abilities on the same origin do not share a cooldown counter — triggering one ability does not block another.
 
+> **Named hotkey slots:** `neoorigins:active_ability` binds to one of the six
+> hardcoded `key.neoorigins.skill_1`..`skill_6` controls. To bind a power to
+> a labelled hotkey from a larger pool, author it as an Apoli-style
+> `origins:active_self` / `origins:toggle` with a `"key"` field — the compat
+> loader routes that through the named-keybind pool. See
+> [Named keybinds](API.md#named-keybinds).
+
 Actions and conditions are compiled once at power-load time via `ActionParser` / `ConditionParser`; runtime only dispatches through the compiled closures.
 
 Hunger gating is handled at the `AbstractActivePower` base class level — when `hunger_cost > 0`, the base checks and debits food before calling `execute`. Any power that extends `AbstractActivePower` and wires `hungerCost()` through its Codec inherits the behavior automatically.
@@ -2205,6 +2237,66 @@ Passively regenerates health on all tamed mobs (via `tame_mob`) on an interval. 
   "interval_ticks": 120,
   "name": "Pack Mender",
   "description": "Your tamed mobs regenerate out of combat."
+}
+```
+
+---
+
+## `neoorigins:mob_behavior`
+
+Rewrites a **mob origin's** AI so the mob hunts players (or another entity type). Unlike the player-facing tame/mount powers, this is applied to a mob origin and controls how that mob acquires and holds targets. On grant, a vanilla `NearestAttackableTargetGoal` (and, when `retaliate` is set, a `HurtByTargetGoal`) is added to the mob's target selector; both are stripped again on revoke, leaving the rest of the mob's vanilla AI intact. With `aggression: "conditional"` it behaves piglin-style — the mob only turns hostile toward a player while every `hostile_when` condition holds (the conditions are evaluated against the prospective player target, not the mob).
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `aggression` | enum | no | `neutral` | `neutral` = vanilla AI unchanged (only `retaliate` applies); `hostile` = always target the target type on sight; `conditional` = target a player only while every `hostile_when` condition holds. |
+| `hostile_when` | array | no | `[]` | Conditions (AND-ed) tested against the **prospective player target** (e.g. "player not wearing gold"), not the mob. Only used when `aggression: "conditional"`; an empty list behaves like `hostile`. |
+| `retaliate` | bool | no | `true` | Also fight back against whatever damaged the mob (vanilla hurt-by-target). |
+| `anger_linger_ticks` | int | no | `200` | Keep the target this many ticks after the trigger stops holding, so the mob calms down gradually (200 = 10s). |
+| `aggro_range` | double | no | `16.0` | Max distance to acquire a target. |
+| `target_type` | resource id | no | players | Entity type id to be hostile toward; omitted = players. Conditions only apply to player targets. |
+| `call_for_help` | bool | no | `false` | When retaliating, alert nearby same-type mobs (vanilla pack aggro). |
+
+**Example — hostile to players only in daylight while not sneaking:**
+```json
+{
+  "type": "neoorigins:mob_behavior",
+  "aggression": "conditional",
+  "aggro_range": 24.0,
+  "anger_linger_ticks": 300,
+  "call_for_help": true,
+  "hostile_when": [
+    { "type": "neoorigins:exposed_to_sun" },
+    { "type": "neoorigins:not", "condition": { "type": "neoorigins:sneaking" } }
+  ]
+}
+```
+
+---
+
+## `neoorigins:mount`
+
+Active keybind power that raycasts for the living entity in front of the player and seats the player on it. Press the skill key with a target in range to mount; press again while riding to dismount. Mobs are mounted immediately; **player** targets require consent according to the server's configured consent mode (`MountConsentManager`). Boss mobs and already-ridden entities are rejected, and the rider is dismounted automatically if the power is revoked. Good for tamer/druid origins that ride mobs (or other players) on demand.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `range` | double | no | `5.0` | Max distance in blocks to raycast for the entity to mount. |
+| `cooldown_ticks` | int | no | `100` | Ticks before the mount ability can be reused (100 = 5s). |
+| `hunger_cost` | int | no | `0` | Hunger consumed each time an entity is mounted. |
+| `allow_players` | bool | no | `true` | Whether this power can mount other players (subject to consent). |
+| `allow_mobs` | bool | no | `true` | Whether this power can mount mobs. |
+| `block_bosses` | bool | no | `true` | Prevent mounting boss mobs like the Ender Dragon or Wither. |
+| `mount_position` | enum | no | `centered` | Where the rider sits: `centered` (on top) or `shoulder` (offset to one side). |
+
+**Example:**
+```json
+{
+  "type": "neoorigins:mount",
+  "range": 6.0,
+  "cooldown_ticks": 60,
+  "allow_players": false,
+  "mount_position": "shoulder",
+  "name": "Mount Beast",
+  "description": "Leap onto the creature you're looking at."
 }
 ```
 
@@ -2428,6 +2520,27 @@ When the player breaks a log, BFS/DFS upward to break all connected logs. Skippe
 
 ---
 
+## `neoorigins:ultimine`
+
+Grants [FTB Ultimine](https://www.curseforge.com/minecraft/mc-mods/ftb-ultimine) vein-mining to the holder. Soft dependency on `ftbultimine`: when that mod is absent this power is an inert marker and does nothing.
+
+When FTB Ultimine is installed, NeoOrigins registers a restriction handler that permits vein-mining only for players with an **active** `neoorigins:ultimine` power and denies it for everyone else. Because FTB Ultimine treats restriction handlers as an AND-gate (the first handler that disallows wins), adding this power to any origin turns vein-mining into an origin-gated ability — only that origin's holders may ultimine.
+
+The integration is completely dormant unless a loaded pack defines a `neoorigins:ultimine` power. While no pack uses it, FTB Ultimine behaves exactly as vanilla (the AND-gate handler stays out of the way for everyone). Once at least one `ultimine` power is loaded, vein-mining is restricted to players who hold an ultimine power. This keeps the soft dependency truly opt-in: installing both mods together changes nothing until a pack adds the power.
+
+This power carries no config. FTB Ultimine's restriction hook is a coarse allow/deny permission check with no setter for the per-player block limit, the require-tool toggle, or the mining shape — so those are **not** exposed here. The block count, tool requirement, cooldown, exhaustion/XP cost, and shape all follow FTB Ultimine's own server config (and any FTB Ranks / attribute overrides). Modeling fields the API cannot honour would be misleading, so the power is deliberately config-light: "while this power is active you may vein-mine."
+
+**Example:**
+```json
+{
+  "type": "neoorigins:ultimine",
+  "name": "Excavator",
+  "description": "Hold the ultimine key and break a block to vein-mine the whole vein. Limits follow the server's FTB Ultimine config."
+}
+```
+
+---
+
 ## `neoorigins:craft_amount_bonus`
 
 Grants bonus items when crafting a specific output (e.g., more planks per log). Hooks `PlayerEvent.ItemCraftedEvent` directly, so bonuses only trigger on genuine crafting operations.
@@ -2502,7 +2615,7 @@ Recipes that compose existing power types to cover use cases the built-in types 
 
 ## Periodic feed / heal via `neoorigins:action_over_time`
 
-NeoOrigins' built-in `neoorigins:tick_action` only ships a hardcoded `TELEPORT_ON_DAMAGE` behaviour. For any other periodic action — periodically restore hunger, heal a fixed amount, apply an effect, run an arbitrary entity-action — use `neoorigins:action_over_time` from the Apoli compat layer.
+NeoOrigins' built-in `neoorigins:tick_action` only ships a hardcoded `TELEPORT_ON_DAMAGE` behaviour. For any other periodic action — periodically restore hunger, heal a fixed amount, apply an effect, run an arbitrary entity-action — use `neoorigins:action_over_time`. It is an alias for [`neoorigins:condition_passive`](#neoorigins_condition_passive) (identical fields), so an optional `condition` gates whether the action runs each interval.
 
 **Periodic hunger restoration** (e.g. for an origin that doesn't eat conventionally):
 ```json
@@ -2529,7 +2642,7 @@ NeoOrigins' built-in `neoorigins:tick_action` only ships a hardcoded `TELEPORT_O
 }
 ```
 
-`interval` is in ticks (20 = 1 second). The `entity_action` runs against the player. Any verb supported by `ActionParser` works (`neoorigins:apply_effect`, `neoorigins:damage`, `neoorigins:execute_command`, `neoorigins:if_else` for conditional wrapping, etc.).
+`interval` is in ticks (20 = 1 second). The `entity_action` runs against the player. An optional `condition` (any `ConditionParser` verb, e.g. `neoorigins:exposed_to_sun`) gates each run. Any verb supported by `ActionParser` works (`neoorigins:apply_effect`, `neoorigins:damage`, `neoorigins:execute_command`, `neoorigins:if_else` for conditional wrapping, etc.).
 
 ## `neoorigins:cobweb_affinity`
 
@@ -3171,3 +3284,72 @@ Individual 2.0 power types are intentionally narrow so they can be combined. For
 
 Each piece is a separate power entry in the origin's `powers` array. The `entity_set` power carries no behaviour on its own — it's the shared name other powers read and write.
 
+---
+
+## `neoorigins:loot_pool_grant`
+
+Active power that rolls a vanilla loot table on activation and grants every rolled stack to the player. Lets pack authors deliver weighted, conditional, function-driven rewards through the full vanilla loot infrastructure instead of a flat item list — and (when FTB Quests is installed) reuse the same loot table as a quest reward via a tag-marker.
+
+| Field | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `grant_id` | string | yes | — | Unique id tracked so the bundle is granted only once per player. Shares the `starting_equipment` grant attachment so an Orb of Origin / `/origin reset` clears both. |
+| `loot_table` | resource-loc | yes | — | The vanilla loot table to roll. Reuses the full vanilla loot infrastructure (weighted entries, conditions, functions, modifiers). |
+| `rolls` | int | no | `1` | Times the table is rolled per activation. |
+| `bonus_rolls` | int | no | `0` | Extra rolls added to `rolls`. Mirrors vanilla loot-pool naming. |
+| `active` | string | no | `""` | Optional display-only translation key advertising which keybind slot the power expects (e.g. `key.use_skill_1`). |
+| `cooldown` | int | no | `0` | Cooldown in ticks between activations (`20` = 1s). |
+
+Overflow that does not fit in the inventory is dropped at the player's feet — no stacks are silently lost. Empty rolls (a table that returns no items) do not consume the `grant_id`, so the author can fix the table and the player can re-activate.
+
+### Worked example — wood starter pack
+
+`data/neoorigins/loot_tables/rewards/wood_starter.json`:
+```json
+{
+  "type": "minecraft:gift",
+  "pools": [
+    {
+      "rolls": 1,
+      "entries": [
+        { "type": "minecraft:item", "name": "minecraft:oak_log", "weight": 3,
+          "functions": [{ "function": "minecraft:set_count", "count": { "min": 8, "max": 16 } }] },
+        { "type": "minecraft:item", "name": "minecraft:birch_log", "weight": 1,
+          "functions": [{ "function": "minecraft:set_count", "count": { "min": 8, "max": 16 } }] }
+      ]
+    },
+    {
+      "rolls": 1,
+      "entries": [
+        { "type": "minecraft:item", "name": "minecraft:stone_axe" }
+      ]
+    }
+  ]
+}
+```
+
+`data/neoorigins/origins/powers/lumberjack_starter_pack.json`:
+```json
+{
+  "type": "neoorigins:loot_pool_grant",
+  "name": "Starter Pack",
+  "description": "Rolls a weighted bundle of logs plus a stone axe on use.",
+  "grant_id": "lumberjack:starter_pack_v1",
+  "loot_table": "neoorigins:rewards/wood_starter",
+  "rolls": 1,
+  "bonus_rolls": 0,
+  "active": "key.use_skill_1",
+  "cooldown": 0
+}
+```
+
+### FTB Quests soft-compat
+
+When `ftbquests` is on the mod list, NeoOrigins listens for FTBQ's `QuestCompletedEvent`. Any quest tagged
+
+```
+neoorigins_loot_pool_grant:<loot_table_id>
+```
+
+routes through the same `LootPoolGrantPower#fireLootPoolGrant` pipeline on completion: the completing player receives the rolled stacks, with dedup keyed on `ftbq:<quest_id>:<table_id>`. Authors get vanilla loot-table reuse for both origin powers and quest rewards without any hard FTBQ dependency.
+
+This is a soft-compat layer — it is **not** an FTBQ `RewardType` registration (which would require Provider-API hooks that vary across FTBQ minor versions). The tag-marker path is the supported integration; a `RewardType` upgrade is reserved for v2.2 once that API stabilises.

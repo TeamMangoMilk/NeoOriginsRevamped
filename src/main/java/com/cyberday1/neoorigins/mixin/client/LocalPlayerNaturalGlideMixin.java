@@ -76,8 +76,15 @@ public abstract class LocalPlayerNaturalGlideMixin {
             || self.hasEffect(MobEffects.LEVITATION)) {
             return false;
         }
-        // Mirror vanilla elytra start timing once airborne; delaying until a
-        // full block of fall distance makes natural glide unreliable.
+        // Previously gated on fallDistance >= 1.0F (GitHub #94 Phantom jitter
+        // fix) — but fallDistance stays 0 during the upward portion of a jump,
+        // so jumping from flat ground to start glide would silently fail and
+        // require a SECOND jump press mid-fall. The aiStep call site already
+        // gates on rising-edge of the jump key (var2 && !var3), which is the
+        // real intent signal — terrain micro-bumps don't fire it unless the
+        // player actively taps jump. If Phantom-jitter resurfaces we'll add a
+        // narrower gate (e.g. "airborne for >= 1 full tick") rather than the
+        // half-second fall-distance window.
         self.startFallFlying();
         return true;
     }

@@ -3,8 +3,10 @@ package com.cyberday1.neoorigins.client;
 import com.cyberday1.neoorigins.NeoOrigins;
 import com.cyberday1.neoorigins.content.ModEntities;
 import com.cyberday1.neoorigins.network.payload.ActivateClassPowerPayload;
+import com.cyberday1.neoorigins.network.payload.ActivatePowerByKeyPayload;
 import com.cyberday1.neoorigins.network.payload.ActivatePowerPayload;
 import com.cyberday1.neoorigins.network.payload.AirJumpPayload;
+import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.renderer.entity.ThrownItemRenderer;
@@ -19,12 +21,6 @@ import net.neoforged.neoforge.event.tick.PlayerTickEvent;
 public class NeoOriginsClientEvents {
 
     private static boolean wasJumping = false;
-    /** Monotonic timestamp (ms) when the last air jump packet was sent — prevents infinite re-activation.
-     *  Uses {@code Util.getMillis()} instead of {@code player.tickCount} because the client creates
-     *  a new LocalPlayer (with tickCount=0) on dimension change, while a static field keeps the old
-     *  value — making {@code (0 - oldTick) > 10} false and silently blocking all flight activation
-     *  until tickCount catches up (minutes). Monotonic ms never resets. */
-    private static long lastAirJumpMs = 0;
 
     @SubscribeEvent
     public static void onClientPlayerTick(PlayerTickEvent.Pre event) {
@@ -66,17 +62,75 @@ public class NeoOriginsClientEvents {
                 new com.cyberday1.neoorigins.network.payload.RequestOpenMobCreatorPayload());
         }
 
+        // Named-hotkey pool: each pool slot is bound to a pack-declared translation
+        // key via HotkeyAssignments. For non-continuous bindings we send on edge
+        // (consumeClick); for continuous bindings we send every tick while held.
+        // Server enforces the actual edge/continuous semantics — sending both
+        // shapes here keeps the client dumb.
+        KeyMapping[] pool = NeoOriginsKeybindings.HOTKEY_POOL;
+        for (int i = 0; i < pool.length; i++) {
+            String key = com.cyberday1.neoorigins.client.HotkeyAssignments.poolKey(i);
+            if (key == null) continue;
+            KeyMapping km = pool[i];
+            boolean continuous = com.cyberday1.neoorigins.client.HotkeyAssignments.isContinuous(key);
+            if (continuous) {
+                // Drain any click events so consumeClick doesn't queue them for
+                // a separate single-fire path while we're in continuous mode.
+                while (km.consumeClick()) { /* discard */ }
+                if (km.isDown()) {
+                    PacketDistributor.sendToServer(new ActivatePowerByKeyPayload(key, true));
+                }
+            } else {
+                if (km.consumeClick()) {
+                    PacketDistributor.sendToServer(new ActivatePowerByKeyPayload(key, false));
+                }
+            }
+        }
+
+        // External (keybindjs-owned) mappings — same dispatch but using the
+        // foreign KeyMapping instance instead of our pool slot.
+        for (var entry : com.cyberday1.neoorigins.client.HotkeyAssignments.externalMappings().entrySet()) {
+            KeyMapping km = entry.getKey();
+            String key = entry.getValue();
+            boolean continuous = com.cyberday1.neoorigins.client.HotkeyAssignments.isContinuous(key);
+            if (continuous) {
+                while (km.consumeClick()) { /* discard */ }
+                if (km.isDown()) {
+                    PacketDistributor.sendToServer(new ActivatePowerByKeyPayload(key, true));
+                }
+            } else {
+                if (km.consumeClick()) {
+                    PacketDistributor.sendToServer(new ActivatePowerByKeyPayload(key, false));
+                }
+            }
+        }
+
         // Detect jump press while airborne for flight power activation
         boolean jumpHeld = Minecraft.getInstance().options.keyJump.isDown();
         boolean jumpPressed = jumpHeld && !wasJumping;
         wasJumping = jumpHeld;
 
+        // Rising-edge detection (jumpPressed = jumpHeld && !wasJumping) is the
+        // only debounce we need: a player physically cannot produce a fresh
+        // rising edge faster than they can release + re-press, and we sample
+        // once per tick. The previous ms-based self-cooldown (500 ms, later
+        // 100 ms) dropped the elytra-start press if it landed inside that
+        // window — felt as a "delay" before glide kicked in. Removed entirely.
         if (jumpPressed && !player.onGround() && !player.isInWater()
-                && !player.isFallFlying() && !player.isPassenger()
-                && (net.minecraft.Util.getMillis() - lastAirJumpMs) > 500) {
-            lastAirJumpMs = net.minecraft.Util.getMillis();
+                && !player.isFallFlying() && !player.isPassenger()) {
             PacketDistributor.sendToServer(new AirJumpPayload());
         }
+    }
+
+    @SubscribeEvent
+    public static void onClientPlayerLoggingOut(
+            net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {
+        // Drop any datapack-declared theme so leaving a server doesn't leak its
+        // selection into the next world / main-menu screens.
+        com.cyberday1.neoorigins.client.theme.ActiveThemeRegistry.clearServerDeclared();
+        // Drop the cached template bundle — it's keyed to the server's loaded
+        // origins, not to anything persistent on the client.
+        com.cyberday1.neoorigins.client.ClientTemplateCache.clear();
     }
 
     public static void onRegisterRenderers(EntityRenderersEvent.RegisterRenderers event) {

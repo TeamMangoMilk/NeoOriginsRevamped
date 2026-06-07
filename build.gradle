@@ -45,6 +45,10 @@ repositories {
     maven { url = 'https://maven.shedaniel.me' }         // REI
     maven { url = 'https://maven.architectury.dev' }     // Architectury (REI dep)
     maven { url = 'https://maven.latvian.dev/releases' } // KubeJS
+    maven { url = 'https://maven.terraformersmc.com/' }  // EMI
+    maven { url = 'https://cursemaven.com' }             // Jade + The One Probe
+    maven { url = 'https://maven.ftb.dev/releases' }     // FTB Quests + FTB Library
+    maven { url = 'https://api.modrinth.com/maven' }     // Accessories (Wisp Forest)
 }
 
 dependencies {
@@ -60,6 +64,39 @@ dependencies {
     // KubeJS – compile-only soft dep. Plugin entry + event group only
     // classloaded when KubeJS is installed at runtime (KubeJSCompat.isLoaded()).
     compileOnly "dev.latvian.mods:kubejs-neoforge:${property('deps.kubejs')}"
+
+    // EMI – recipe viewer. API compile-only; full jar runtimeOnly for dev testing.
+    compileOnly "dev.emi:emi-neoforge:${property('deps.emi')}:api"
+    runtimeOnly "dev.emi:emi-neoforge:${property('deps.emi')}"
+
+    // Jade – entity tooltip overlay. Compile-only soft dep (CurseMaven).
+    compileOnly "curse.maven:jade-324717:${property('deps.jade')}"
+
+    // The One Probe – probe overlay. Compile-only soft dep (CurseMaven).
+    compileOnly "curse.maven:the-one-probe-245211:${property('deps.top')}"
+
+    // FTB Quests – "grant loot pool" reward type. Compile-only soft dep; the
+    // reward class is only classloaded when ftbquests is present at runtime.
+    // ftb-library + ftb-teams are FTBQ's own compile deps (Reward API touches
+    // FTB Library config types). architectury is already declared above.
+    compileOnly "dev.ftb.mods:ftb-quests-neoforge:${property('deps.ftbquests')}"
+    compileOnly "dev.ftb.mods:ftb-library-neoforge:${property('deps.ftblibrary')}"
+    compileOnly "dev.ftb.mods:ftb-teams-neoforge:${property('deps.ftbteams')}"
+
+    // FTB Ultimine – the `ultimine` vein-mining power grants ultimine to active
+    // origin holders via a registered RestrictionHandler. Compile-only soft dep;
+    // all FTB-Ultimine-typed code is isolated in compat/ftbultimine and only
+    // classloaded behind a ModList.isLoaded("ftbultimine") gate. The Ultimine
+    // API references FTB Library types, so ftb-library is on the compile
+    // classpath (already declared above for FTBQ). 1.21.1 line (2101.1.x).
+    compileOnly "dev.ftb.mods:ftb-ultimine-neoforge:${property('deps.ftbultimine')}"
+
+    // Accessories (Wisp Forest) – equipped-accessory inspection for the
+    // equipped_item condition + umbrella detection. Compile-only soft dep; all
+    // Accessories-typed code is isolated in compat/condition/AccessoriesCompat
+    // and only classloaded behind a ModList.isLoaded("accessories") gate
+    // (Modrinth maven; group maven.modrinth). 1.21.1-only — no 26.1 build exists.
+    compileOnly "maven.modrinth:accessories:${property('deps.accessories')}"
 }
 
 sourceSets {
@@ -201,6 +238,67 @@ tasks.register('compatTest', JavaExec) {
     args 'src/main/resources/data', 'example-pack/data'
 }
 
+// ── Compat-verb golden master (registry-refactor Layer-1 regression net) ─────
+// Emits a deterministic per-verb recognition + field-coverage dump over the
+// built-in corpus. Baselined against the parsers' KNOWN_TYPES; after the
+// registry migration (KNOWN_TYPES → CompatRegistries.*Keys()) the regenerated
+// artifact must stay byte-identical, proving the registry recognizes exactly
+// the same verb set in the same categories.
+//
+// Run: ./gradlew goldenMaster   (writes compat-golden/compat-verbs.txt — tracked,
+// so the byte-identical gate is enforceable via `git diff --exit-code compat-golden`)
+tasks.register('goldenMaster', JavaExec) {
+    group = 'neoorigins'
+    description = '[registry-refactor] Regenerate the compat-verb golden-master baseline.'
+    dependsOn 'compileJava'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.cyberday1.neoorigins.dev.CompatTestHarness'
+    args '--golden-master', 'compat-golden/compat-verbs.txt',
+         'src/main/resources/data', 'example-pack/data'
+}
+
+// ── Phase 2 / D3: regenerate docs/schema/power.schema.json ──────────────────
+//
+// Emits a full per-power JSON-Schema from the BuiltinPowers FieldSpec registry
+// (editor-metadata only — the power Codec parse path never reads this file).
+// Deterministic: the top-level type.enum and the oneOf branches are sorted by
+// id, and re-running on the generator's own output is byte-identical.
+//
+// Run: ./gradlew generatePowerSchema   (writes docs/schema/power.schema.json)
+tasks.register('generatePowerSchema', JavaExec) {
+    group = 'neoorigins'
+    description = '[2-D3] Regenerate docs/schema/power.schema.json from BuiltinPowers FieldSpecs.'
+    dependsOn 'compileJava'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.cyberday1.neoorigins.dev.PowerSchemaGenerator'
+    args 'docs/schema/power.schema.json'
+}
+
+// Regenerate action.schema.json + condition.schema.json from the BuiltinActions /
+// BuiltinConditions FieldSpec registries — the action/condition analogue of
+// generatePowerSchema (editor-metadata only; the parser path never reads these).
+// Run: ./gradlew generateActionConditionSchema   (writes both files)
+tasks.register('generateActionConditionSchema', JavaExec) {
+    group = 'neoorigins'
+    description = '[2] Regenerate docs/schema/{action,condition}.schema.json from the registries.'
+    dependsOn 'compileJava'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.cyberday1.neoorigins.dev.ActionConditionSchemaGenerator'
+}
+
+// Parity gate: parse the committed action/condition schemas AND the registry-
+// generated ones through the production SchemaFormModel and diff per-id field
+// shapes. Fails on any MISSING/CHANGED so the registry-parity work is verifiable
+// and (once generation is the source of truth) drift is guarded.
+// Run: ./gradlew actionConditionSchemaCheck
+tasks.register('actionConditionSchemaCheck', JavaExec) {
+    group = 'neoorigins'
+    description = '[2] Diff committed vs registry-generated action/condition schemas via SchemaFormModel.'
+    dependsOn 'classes'
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.cyberday1.neoorigins.dev.ActionConditionSchemaCheck'
+}
+
 // ── 2.1 creator: package the power schema onto the runtime classpath ────────
 //
 // docs/schema/power.schema.json is the human-facing source of truth. The
@@ -216,6 +314,15 @@ processResources {
         into 'data/neoorigins/schema'
     }
     from('docs/schema/condition.schema.json') {
+        into 'data/neoorigins/schema'
+    }
+    from('docs/schema/block_condition.schema.json') {
+        into 'data/neoorigins/schema'
+    }
+    from('docs/schema/item_condition.schema.json') {
+        into 'data/neoorigins/schema'
+    }
+    from('docs/schema/item_action.schema.json') {
         into 'data/neoorigins/schema'
     }
     from('docs/schema/field_docs.json') {

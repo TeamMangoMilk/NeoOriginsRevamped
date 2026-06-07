@@ -104,9 +104,28 @@ public final class CompatTestHarness {
     public static void main(String[] args) throws IOException {
         if (args.length == 0) {
             System.err.println("usage: CompatTestHarness <dir> [<dir>...]");
+            System.err.println("       CompatTestHarness --golden-master <outfile> <dir> [<dir>...]");
             System.err.println("  Each <dir> is a datapack data/ root or a pack zip extraction root.");
             System.err.println("  The harness scans for **/powers/**/*.json files.");
             System.exit(2);
+        }
+
+        // ── Golden-master mode (Layer-1 regression net) ──────────────────────
+        // Emits a deterministic per-verb recognition + field-coverage dump over
+        // the corpus. Baselined now against the parsers' KNOWN_TYPES; re-run
+        // after the registry migration (when KNOWN_TYPES → registry.keySet())
+        // it must reproduce byte-identically — proving the registry recognizes
+        // exactly the same verb set, in the same categories, as the switches.
+        if (args[0].equals("--golden-master")) {
+            if (args.length < 3) {
+                System.err.println("usage: CompatTestHarness --golden-master <outfile> <dir> [<dir>...]");
+                System.exit(2);
+            }
+            Path out = Path.of(args[1]);
+            List<Path> roots = new ArrayList<>();
+            for (int i = 2; i < args.length; i++) roots.add(Path.of(args[i]));
+            runGoldenMaster(roots, out);
+            return;
         }
 
         List<Finding> findings = new ArrayList<>();
@@ -196,9 +215,22 @@ public final class CompatTestHarness {
             return;
         }
 
-        // Native NeoOrigins types — always pass
+        // Entity-action lint runs over every power JSON regardless of namespace,
+        // because nested entity_action trees can reach into Apoli/Apace power
+        // shapes (e.g. action_on_hit) just as much as into native ones.
+        validateEntityActions(json, path, findings);
+
+        // Native NeoOrigins types — structurally validated, then pass.
+        // Previously these auto-PASSed; v2.1.6 added per-type structural hooks
+        // (see validateNativeStructure) so authoring mistakes in native packs
+        // surface as WARN here instead of silently no-op'ing at runtime.
         if (type.startsWith(NEO_PREFIX)) {
-            findings.add(new Finding(Result.PASS, path, type, "native type"));
+            String nativeIssue = validateNativeStructure(type, json);
+            if (nativeIssue != null) {
+                findings.add(new Finding(Result.WARN, path, type, "native struct: " + nativeIssue));
+            } else {
+                findings.add(new Finding(Result.PASS, path, type, "native type"));
+            }
             return;
         }
 
@@ -253,7 +285,15 @@ public final class CompatTestHarness {
                 boolean routeBFallback = (type.contains("modify_damage_taken") || type.contains("modify_damage_dealt"))
                     && json.has("condition");
                 if (routeBFallback) {
-                    findings.add(new Finding(Result.SKIP, path, type, "Route B fallback (conditioned)"));
+                    // Same parser-canonical structural check as the explicit Route B
+                    // path. parseConditionedModifyDamage* accepts singular `modifier`
+                    // or plural `modifiers`; missing both is a no-op power → WARN.
+                    String structIssue = validateRouteBStructure(type, json);
+                    if (structIssue != null) {
+                        findings.add(new Finding(Result.WARN, path, type, "Route B struct: " + structIssue));
+                    } else {
+                        findings.add(new Finding(Result.SKIP, path, type, "Route B fallback (conditioned)"));
+                    }
                 } else {
                     findings.add(new Finding(Result.FAIL, path, type, "translator returned empty"));
                 }
@@ -261,6 +301,197 @@ public final class CompatTestHarness {
         } catch (Exception e) {
             findings.add(new Finding(Result.FAIL, path, type, "translator threw: " + e.getClass().getSimpleName() + ": " + e.getMessage()));
         }
+    }
+
+    // ── Golden-master dump (Layer-1 regression net) ──────────────────────────
+
+    /** Mutable per-raw-type accumulation: occurrence count + observed sibling fields. */
+    private static final class VerbObs {
+        int count = 0;
+        final TreeSet<String> fields = new TreeSet<>();
+    }
+
+    /**
+     * Walk every power JSON in {@code roots}, record every object carrying a
+     * {@code type} (the union of all action/condition/item-verb occurrences as
+     * well as power types, modifiers, etc.), and emit a deterministic artifact:
+     *
+     * <ul>
+     *   <li><b>Section 1 — RECOGNIZED VERBS:</b> the four parsers' KNOWN_TYPES
+     *       sets, sorted. Corpus-independent; this is the precise migration
+     *       byte-compare target (KNOWN_TYPES today, registry.keySet() after).</li>
+     *   <li><b>Section 2 — CORPUS COVERAGE:</b> one line per observed raw type
+     *       (sorted), with occurrence count, which categories recognize it
+     *       (computed via each category's own canonicalization), and the sorted
+     *       union of sibling field keys — the field-coverage reference each
+     *       descriptor's {@code FieldSpec} list must satisfy post-migration.</li>
+     * </ul>
+     */
+    private static void runGoldenMaster(List<Path> roots, Path out) throws IOException {
+        Map<String, VerbObs> observed = new TreeMap<>();
+        int files = 0;
+        long typedObjects = 0;
+
+        for (Path root : roots) {
+            if (!Files.isDirectory(root)) {
+                System.err.println("WARN: not a directory, skipping: " + root);
+                continue;
+            }
+            try (Stream<Path> stream = Files.walk(root)) {
+                for (Path p : (Iterable<Path>) stream::iterator) {
+                    if (!p.toString().endsWith(".json")) continue;
+                    if (!p.toString().replace('\\', '/').contains("/powers/")) continue;
+                    files++;
+                    JsonElement el;
+                    try {
+                        el = JsonParser.parseString(Files.readString(p));
+                    } catch (Exception e) {
+                        System.err.println("WARN: JSON parse error, skipping " + p + ": " + e.getMessage());
+                        continue;
+                    }
+                    typedObjects += collectTypedObjects(el, observed);
+                }
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("# NeoOrigins compat-verb golden master\n");
+        sb.append("# Generated by CompatTestHarness --golden-master. DO NOT EDIT BY HAND.\n");
+        sb.append("# recognition-source: parser KNOWN_TYPES  (post-migration: CompatRegistries.*Keys())\n");
+        sb.append("# Re-run after each verb migration; this file must stay byte-identical.\n");
+        sb.append("# corpus: ").append(String.join(", ", roots.stream().map(Path::toString)
+            .map(s -> s.replace('\\', '/')).toList())).append('\n');
+        sb.append("# files-scanned: ").append(files)
+          .append("   typed-objects: ").append(typedObjects)
+          .append("   distinct-types: ").append(observed.size()).append('\n');
+        sb.append('\n');
+
+        sb.append("== RECOGNIZED VERBS ==\n");
+        appendVerbSet(sb, "action",
+            com.cyberday1.neoorigins.compat.action.ActionParser.KNOWN_TYPES);
+        appendVerbSet(sb, "condition",
+            com.cyberday1.neoorigins.compat.condition.ConditionParser.KNOWN_TYPES);
+        appendVerbSet(sb, "item_action",
+            com.cyberday1.neoorigins.compat.action.ItemActionParser.KNOWN_TYPES);
+        appendVerbSet(sb, "item_condition",
+            com.cyberday1.neoorigins.compat.condition.ItemConditionParser.KNOWN_TYPES);
+        sb.append('\n');
+
+        sb.append("== CORPUS COVERAGE ==\n");
+        sb.append("# <raw-type>\tx<count>\trecognized=<categories>\tfields={...}\n");
+        for (var e : observed.entrySet()) {
+            String raw = e.getKey();
+            VerbObs vo = e.getValue();
+            sb.append(raw)
+              .append("\tx").append(vo.count)
+              .append("\trecognized=").append(recognizedCategories(raw))
+              .append("\tfields={").append(String.join(",", vo.fields)).append("}\n");
+        }
+        sb.append('\n');
+
+        // ── POWER COVERAGE (registry-refactor: power field-spec layer) ───────
+        // One line per power type registered in BuiltinPowers, dumping the
+        // spec-DECLARED field set (the metadata source of truth, NOT the codec
+        // parse path — powers still deserialize via their own Codec<Config>).
+        // This makes spec-vs-corpus drift a reviewable git diff: as powers are
+        // migrated into BuiltinPowers, their declared field set lands here and
+        // can be eyeballed against the CORPUS COVERAGE fields above. Empty when
+        // nothing is registered; marker-only powers list fields={}.
+        sb.append("== POWER COVERAGE ==\n");
+        sb.append("# <power-type>\tfields={...}  (spec-declared, from BuiltinPowers)\n");
+        var powerDescriptors =
+            com.cyberday1.neoorigins.power.registry.BuiltinPowers.descriptors();
+        for (var e : powerDescriptors.entrySet()) {
+            TreeSet<String> declared = new TreeSet<>();
+            for (var fs : e.getValue().fields()) declared.add(flattenPowerField(fs));
+            sb.append(e.getKey().toString())
+              .append("\tfields={").append(String.join(",", declared)).append("}\n");
+        }
+
+        if (out.getParent() != null) Files.createDirectories(out.getParent());
+        Files.writeString(out, sb.toString());
+        System.out.print(sb);
+        System.out.println();
+        System.out.println("golden master written to " + out.toAbsolutePath().normalize());
+    }
+
+    /**
+     * Flatten a power {@link com.cyberday1.neoorigins.compat.registry.FieldSpec}
+     * for the POWER COVERAGE golden: a leaf emits {@code fs.name()}; an
+     * OBJECT-with-children emits {@code fs.name()+"{"+sorted-child-names+"}"} so
+     * nested-object shape lands as a reviewable git diff.
+     */
+    private static String flattenPowerField(
+            com.cyberday1.neoorigins.compat.registry.FieldSpec fs) {
+        if (fs.children().isEmpty()) return fs.name();
+        TreeSet<String> kids = new TreeSet<>();
+        for (var child : fs.children()) kids.add(flattenPowerField(child));
+        return fs.name() + "{" + String.join(",", kids) + "}";
+    }
+
+    private static void appendVerbSet(StringBuilder sb, String label, java.util.Set<String> verbs) {
+        sb.append('[').append(label).append("] (").append(verbs.size()).append(")\n");
+        for (String v : new TreeSet<>(verbs)) sb.append("  ").append(v).append('\n');
+    }
+
+    private static long collectTypedObjects(JsonElement el, Map<String, VerbObs> observed) {
+        if (el == null) return 0;
+        long n = 0;
+        if (el.isJsonObject()) {
+            JsonObject obj = el.getAsJsonObject();
+            String t = getNestedType(obj);
+            if (t != null && !t.isBlank()) {
+                n++;
+                VerbObs vo = observed.computeIfAbsent(t, k -> new VerbObs());
+                vo.count++;
+                for (String k : obj.keySet()) {
+                    if (!k.equals("type")) vo.fields.add(k);
+                }
+            }
+            for (var entry : obj.entrySet()) n += collectTypedObjects(entry.getValue(), observed);
+        } else if (el.isJsonArray()) {
+            for (JsonElement child : el.getAsJsonArray()) n += collectTypedObjects(child, observed);
+        }
+        return n;
+    }
+
+    /**
+     * Categories whose recognized set accepts {@code rawType}, each evaluated
+     * through that category's own canonicalization (entity action/condition only
+     * rewrite bare/origins/apace; item parsers rewrite any non-neoorigins prefix).
+     * Returns "-" when no category recognizes the type.
+     */
+    private static String recognizedCategories(String rawType) {
+        String entity = canonEntity(rawType);
+        String item = canonItem(rawType);
+        List<String> cats = new ArrayList<>();
+        if (com.cyberday1.neoorigins.compat.action.ActionParser.KNOWN_TYPES.contains(entity))
+            cats.add("action");
+        if (com.cyberday1.neoorigins.compat.condition.ConditionParser.KNOWN_TYPES.contains(entity))
+            cats.add("condition");
+        if (com.cyberday1.neoorigins.compat.action.ItemActionParser.KNOWN_TYPES.contains(item))
+            cats.add("item_action");
+        if (com.cyberday1.neoorigins.compat.condition.ItemConditionParser.KNOWN_TYPES.contains(item))
+            cats.add("item_condition");
+        return cats.isEmpty() ? "-" : String.join(",", cats);
+    }
+
+    /** Entity action/condition canonicalization — mirrors ActionParser/ConditionParser. */
+    private static String canonEntity(String type) {
+        if (type.isEmpty()) return type;
+        if (type.indexOf(':') < 0) return "neoorigins:" + type;
+        if (type.startsWith("origins:") || type.startsWith("apace:"))
+            return "neoorigins:" + type.substring(type.indexOf(':') + 1);
+        return type;
+    }
+
+    /** Item action/condition canonicalization — mirrors ItemActionParser/ItemConditionParser. */
+    private static String canonItem(String type) {
+        if (type.isEmpty()) return type;
+        if (type.indexOf(':') < 0) return "neoorigins:" + type;
+        if (!type.startsWith("neoorigins:"))
+            return "neoorigins:" + type.substring(type.indexOf(':') + 1);
+        return type;
     }
 
     // ── Field Loss Detection ────────────────────────────────────────────────
@@ -421,7 +652,136 @@ public final class CompatTestHarness {
                     yield "missing 'modifier'/'modifiers'";
                 yield null;
             }
+            // modify_xp_gain / modify_lava_speed: parseNumericModifier accepts both
+            // singular "modifier" and plural "modifiers", and per-entry either
+            // "value" or "amount". Mirror the parser's tolerance here.
+            case "modify_xp_gain", "modify_lava_speed" -> {
+                if (!json.has("modifier") && !json.has("modifiers"))
+                    yield "missing 'modifier'/'modifiers'";
+                yield null;
+            }
+            // modify_damage_taken / modify_damage_dealt: parseConditionedModifyDamage*
+            // routes through parseModifierList, so both singular "modifier" and plural
+            // "modifiers" are accepted (and per-entry either "value" or "amount").
+            // An absent modifier no longer hard-fails — the multiplier just stays 1.0
+            // (effectively a no-op power), so flag missing-modifier as a WARN so authors
+            // notice the dead power without breaking load.
+            case "modify_damage_taken", "modify_damage_dealt" -> {
+                if (!json.has("modifier") && !json.has("modifiers"))
+                    yield "missing 'modifier'/'modifiers'";
+                yield null;
+            }
             default -> null; // Unknown Route B — can't validate
+        };
+    }
+
+    // ── Entity-Action Lint (recursive) ──────────────────────────────────────
+
+    /**
+     * Walk the entire power JSON tree looking for entity-action objects (any
+     * sub-object whose {@code type} matches an entity-action id we care about)
+     * and apply parser-canonical structural checks. Currently covers
+     * {@code neoorigins:spawn_entity} / {@code apace:spawn_entity}'s
+     * {@code quantity} field (v2.1.6); future entity-action lints hook here.
+     */
+    private static void validateEntityActions(JsonElement el, String path, List<Finding> findings) {
+        if (el == null) return;
+        if (el.isJsonObject()) {
+            JsonObject obj = el.getAsJsonObject();
+            String t = getNestedType(obj);
+            if (t != null) {
+                if (t.equals("neoorigins:spawn_entity") || t.equals("apace:spawn_entity")
+                    || t.equals("origins:spawn_entity") || t.equals("spawn_entity")) {
+                    String issue = validateSpawnEntityQuantity(obj);
+                    if (issue != null) {
+                        findings.add(new Finding(Result.WARN, path, t, "spawn_entity: " + issue));
+                    }
+                }
+            }
+            for (var entry : obj.entrySet()) {
+                validateEntityActions(entry.getValue(), path, findings);
+            }
+        } else if (el.isJsonArray()) {
+            for (JsonElement child : el.getAsJsonArray()) {
+                validateEntityActions(child, path, findings);
+            }
+        }
+    }
+
+    private static String validateSpawnEntityQuantity(JsonObject obj) {
+        if (!obj.has("quantity")) return null;
+        JsonElement q = obj.get("quantity");
+        if (!q.isJsonPrimitive() || !q.getAsJsonPrimitive().isNumber()) {
+            return "'quantity' must be an integer (got " + q + ") — parser will clamp to 1";
+        }
+        // Reject non-integer numbers (1.5) and negatives/zero.
+        try {
+            double dv = q.getAsDouble();
+            if (dv != Math.floor(dv)) {
+                return "'quantity' must be an integer (got " + dv + ") — parser will truncate";
+            }
+            int iv = q.getAsInt();
+            if (iv < 1) return "'quantity' must be ≥1 (got " + iv + ") — parser will clamp to 1";
+        } catch (NumberFormatException e) {
+            return "'quantity' must be an integer (got " + q + ")";
+        }
+        return null;
+    }
+
+    // ── Native Structural Validation ────────────────────────────────────────
+
+    /**
+     * Structural lint for {@code neoorigins:*} types. Returns a short reason
+     * string when a load-bearing field is missing/malformed, or {@code null}
+     * when the JSON is plausibly grantable. Mirrors the parser-canonical
+     * tolerance the runtime applies (the runtime logs a WARN and skips —
+     * we surface the same WARN at scan time so authoring mistakes don't
+     * silently no-op).
+     */
+    private static String validateNativeStructure(String type, JsonObject json) {
+        String base = type.contains(":") ? type.substring(type.indexOf(':') + 1) : type;
+        return switch (base) {
+            case "starting_equipment" -> {
+                // Accept either singular `item` (non-blank) OR non-empty `stacks`.
+                // Mirrors StartingEquipmentPower.effectiveStacks(): empty both →
+                // runtime WARN + skipped grant.
+                boolean hasItem = json.has("item")
+                    && json.get("item").isJsonPrimitive()
+                    && !json.get("item").getAsString().isBlank();
+                boolean hasStacks = json.has("stacks")
+                    && json.get("stacks").isJsonArray()
+                    && json.getAsJsonArray("stacks").size() > 0;
+                if (!hasItem && !hasStacks) {
+                    yield "missing 'item' or non-empty 'stacks'";
+                }
+                yield null;
+            }
+            case "loot_pool_grant" -> {
+                // Mirrors LootPoolGrantPower.execute(): missing/blank loot_table
+                // → runtime WARN + skipped grant. Non-positive `rolls` (when set
+                // explicitly) collapses the effective roll count to bonus_rolls
+                // only — if both are unset/zero the power is a no-op.
+                boolean hasTable = json.has("loot_table")
+                    && json.get("loot_table").isJsonPrimitive()
+                    && !json.get("loot_table").getAsString().isBlank();
+                if (!hasTable) {
+                    yield "missing 'loot_table'";
+                }
+                if (json.has("rolls") && json.get("rolls").isJsonPrimitive()
+                        && json.get("rolls").getAsJsonPrimitive().isNumber()) {
+                    int rolls = json.get("rolls").getAsInt();
+                    int bonus = json.has("bonus_rolls")
+                            && json.get("bonus_rolls").isJsonPrimitive()
+                            && json.get("bonus_rolls").getAsJsonPrimitive().isNumber()
+                        ? json.get("bonus_rolls").getAsInt() : 0;
+                    if (rolls <= 0 && bonus <= 0) {
+                        yield "'rolls' must be positive (got " + rolls
+                            + ") — power will be a no-op";
+                    }
+                }
+                yield null;
+            }
+            default -> null; // Unknown native type — no structural lint yet
         };
     }
 

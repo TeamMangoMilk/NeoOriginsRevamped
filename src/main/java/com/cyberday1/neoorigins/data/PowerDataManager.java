@@ -37,11 +37,48 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
     private static final FileToIdConverter COMPAT_CONVERTER = FileToIdConverter.json("powers");
 
     private Map<ResourceLocation, PowerHolder<?>> powers = new HashMap<>();
+    /** Post-translation raw JSON kept for the creator's template loader so a
+     *  cloned vanilla power lands in the draft as the same body the loader
+     *  saw, not a codec round-trip (which loses fields stripped before parse).
+     *  Only powers that successfully parse are recorded. */
+    private Map<ResourceLocation, JsonObject> rawPowerJson = new HashMap<>();
     /** Route B powers injected by OriginsCompatPowerLoader after native loading. */
     private Map<ResourceLocation, PowerHolder<?>> injectedPowers = new HashMap<>();
     /** Bumped on every datapack reload and Route-B injection so per-player power caches can invalidate. */
     private int version = 0;
     public int version() { return version; }
+
+    /** Cached: does any loaded power (native or Route-B injected) have type
+     *  {@code neoorigins:ultimine}? Recomputed whenever the power set changes
+     *  (datapack reload in {@link #apply} or Route-B injection in
+     *  {@link #injectExternalPowers}). Lets the FTB Ultimine bridge stay
+     *  completely dormant unless a loaded pack actually defines an ultimine
+     *  power — without this flag the deny-only restriction API would disable
+     *  vein-mining for non-holders even when no pack uses the power. */
+    private boolean ultiminePowerInUse = false;
+
+    /** True if at least one loaded power has type {@code neoorigins:ultimine}. */
+    public boolean isUltiminePowerInUse() { return ultiminePowerInUse; }
+
+    /** Rescan the loaded power set for any {@code neoorigins:ultimine} power. */
+    private void recomputeUltiminePowerInUse() {
+        boolean found = false;
+        for (PowerHolder<?> holder : powers.values()) {
+            if (holder.type() instanceof com.cyberday1.neoorigins.power.builtin.UltiminePower) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            for (PowerHolder<?> holder : injectedPowers.values()) {
+                if (holder.type() instanceof com.cyberday1.neoorigins.power.builtin.UltiminePower) {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        this.ultiminePowerInUse = found;
+    }
 
     @Override
     protected Map<ResourceLocation, JsonElement> prepare(ResourceManager resourceManager, ProfilerFiller profiler) {
@@ -75,7 +112,8 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
             ResourceLocation id = entry.getKey();
             if (!entry.getValue().isJsonObject()) continue;
             JsonObject json = entry.getValue().getAsJsonObject();
-            String typeStr = OriginsFormatDetector.getType(json);
+            // Canonicalize apoli:/apugli: -> origins: so apoli:multiple is expanded.
+            String typeStr = OriginsFormatDetector.canonicalizePowerType(json);
             if ("origins:multiple".equals(typeStr) || "apace:multiple".equals(typeStr)) {
                 working.remove(id);
                 try {
@@ -105,6 +143,7 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
         }
 
         Map<ResourceLocation, PowerHolder<?>> loaded = new HashMap<>();
+        Map<ResourceLocation, JsonObject> rawSnapshot = new HashMap<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : working.entrySet()) {
             ResourceLocation id = entry.getKey();
             try {
@@ -115,6 +154,11 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
                     continue;
                 }
 
+                // Canonicalize apoli:/apugli: -> origins: here too, to cover the
+                // synthetic sub-powers emitted by multiple-expansion (which never
+                // pass through the first loop).
+                OriginsFormatDetector.canonicalizePowerType(json);
+
                 // Translate Origins-format power to NeoOrigins format before parsing
                 if (OriginsFormatDetector.isOriginsFormat(json)) {
                     Optional<JsonObject> translated = OriginsPowerTranslator.translate(id, json);
@@ -123,6 +167,12 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
                 }
 
                 ResourceLocation typeId = ResourceLocation.parse(json.get("type").getAsString());
+                // Apply config overrides BEFORE alias remap, so the remapper's
+                // value-dependent gates (e.g. damage_in_water's dps > 0 check
+                // that decides whether to bake a damage entity_action or a
+                // neoorigins:nothing no-op) and the field-strip step see the
+                // user's final values rather than the pack defaults.
+                applyConfigOverrides(id, json);
                 // 2.0 legacy alias remap — transparently rewrites old type IDs.
                 typeId = LegacyPowerTypeAliases.apply(typeId, json, id);
                 PowerType<?> type = PowerTypes.get(typeId);
@@ -135,14 +185,22 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
                     }
                     continue;
                 }
+                int beforeSize = loaded.size();
                 parsePower(id, type, json, loaded);
+                if (loaded.size() > beforeSize) {
+                    // Power parsed cleanly — keep a deep copy of the post-
+                    // translation body for the creator's template loader.
+                    rawSnapshot.put(id, json.deepCopy());
+                }
             } catch (Exception e) {
                 NeoOrigins.LOGGER.error("Error loading power {}", id, e);
             }
         }
         this.powers = Collections.unmodifiableMap(loaded);
+        this.rawPowerJson = Collections.unmodifiableMap(rawSnapshot);
         this.injectedPowers = new HashMap<>(); // cleared; Route B will re-inject after us
         this.version++;
+        recomputeUltiminePowerInUse();
         NeoOrigins.LOGGER.info("Loaded {} powers", loaded.size());
 
         // Per-namespace breakdown — toggled via config/neoorigins-common.toml
@@ -159,8 +217,8 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
     private <C extends PowerConfiguration> void parsePower(
             ResourceLocation id, PowerType<C> type, JsonObject json,
             Map<ResourceLocation, PowerHolder<?>> target) {
-        // Apply config overrides before parsing
-        applyConfigOverrides(id, json);
+        // Config overrides are applied upstream in loadPowers/apply() before the
+        // legacy alias remap so value-dependent gates see the user's values.
 
         Component name = extractComponentField(json, "name");
         Component desc = extractComponentField(json, "description");
@@ -285,6 +343,7 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
     public void injectExternalPowers(Map<ResourceLocation, PowerHolder<?>> external) {
         this.injectedPowers = Collections.unmodifiableMap(new HashMap<>(external));
         this.version++;
+        recomputeUltiminePowerInUse();
     }
 
     /** Returns all powers including Route B injected ones (used for registry sync). */
@@ -304,5 +363,12 @@ public class PowerDataManager extends SimplePreparableReloadListener<Map<Resourc
 
     public boolean hasPower(ResourceLocation id) {
         return powers.containsKey(id) || injectedPowers.containsKey(id);
+    }
+
+    /** Post-translation raw power JSON for the creator's template loader.
+     *  Returns null when this power was only loaded on the client (powers
+     *  aren't synced with their bodies) or wasn't loaded at all. */
+    public JsonObject getRawPowerJson(ResourceLocation id) {
+        return rawPowerJson.get(id);
     }
 }

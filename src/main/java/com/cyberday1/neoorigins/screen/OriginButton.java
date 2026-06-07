@@ -1,10 +1,12 @@
 package com.cyberday1.neoorigins.screen;
 
 import com.cyberday1.neoorigins.api.origin.Origin;
+import com.cyberday1.neoorigins.client.theme.UITheme;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.ItemStack;
 /**
@@ -27,22 +29,29 @@ public class OriginButton extends Button {
 
     @Override
     public void renderWidget(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
-        // Background
-        int bg = isSelected() ? 0xFF1E3A6E : (isHovered() ? 0xFF1E1E32 : 0xFF14141F);
-        g.fill(getX(), getY(), getX() + getWidth(), getY() + getHeight(), bg);
+        UITheme theme = UITheme.current();
 
-        // Border — bright when selected, dim otherwise
-        int border = isSelected() ? 0xFF4A90D9 : 0xFF2A2A44;
-        g.renderOutline(getX(), getY(), getWidth(), getHeight(), border);
+        // Parchment scroll skin: rolled (closed) when resting, unrolled (open)
+        // when selected or hovered, with a warm glow on hover. Replaces the old
+        // flat fill + outline.
+        boolean active = isSelected() || isHovered();
+        ScrollButtonRenderer.draw(g, getX(), getY(), getWidth(), getHeight(),
+            active, isHovered(), 1.0f, true);
 
         // 16×16 icon
         renderIcon(g, origin.icon(), getX() + 3, getY() + (getHeight() - 16) / 2);
 
-        // Name
-        int nameColor = isSelected() ? 0xFFFFFFFF : (isHovered() ? 0xFFDDDDDD : 0xFFAAAAAA);
+        // Name — themed font, theme text colors.
+        int nameColor = isSelected() ? theme.nameColor() : theme.descriptionColor();
         Minecraft mc = Minecraft.getInstance();
         int textY = getY() + (getHeight() - 8) / 2;
-        g.drawString(mc.font, origin.name(), getX() + 22, textY, nameColor, false);
+        ResourceLocation fid = theme.font();
+        Component label = fid != null ? origin.name().copy().withStyle(s -> s.withFont(fid)) : origin.name();
+        // Centre the name across the full button width, but never let it slide
+        // left under the 16×16 icon (x+3..x+19) — long names fall back to a
+        // left-aligned x+22 so they stay clear of the icon and the right edge.
+        int textX = Math.max(getX() + 22, getX() + (getWidth() - mc.font.width(label)) / 2);
+        g.drawString(mc.font, label, textX, textY, nameColor, false);
     }
 
     /**

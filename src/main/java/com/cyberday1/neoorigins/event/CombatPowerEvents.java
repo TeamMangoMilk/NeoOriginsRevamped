@@ -90,6 +90,15 @@ public class CombatPowerEvents {
                 if (!ActionOnHitPower.rollChance(config)) return;
                 ActionOnHitPower.execute(outAttacker, config, outTarget);
             });
+
+            // Route B self_action_on_hit / action_on_hit — fires when the holder
+            // deals damage; passes the victim directly so the parsed
+            // bientity_action can resolve (actor=holder, target=victim).
+            final LivingEntity dealTarget = outTarget;
+            ActiveOriginService.forEachOfType(outAttacker,
+                com.cyberday1.neoorigins.compat.CompatPower.class, cfg -> {
+                    if (cfg.onDealDamage() != null) cfg.onDealDamage().accept(outAttacker, dealTarget);
+                });
         }
 
         if (!(event.getEntity() instanceof ServerPlayer sp)) return;
@@ -108,9 +117,20 @@ public class CombatPowerEvents {
         // If the player dismissed the picker without committing any origin,
         // `pickerAbandoned` is set by the client and invulnerability drops so
         // they can't stay immortal forever by escaping.
+        //
+        // The invuln window must end the instant the player has actually
+        // committed an origin — NOT only when hadAllOrigins flips. On servers
+        // with multi/conditional/hidden layers, handleChooseOrigin's allFilled
+        // check can fail to set hadAllOrigins live even though the player has
+        // picked everything the picker showed them; the player then stayed
+        // immortal until a relog, where checkAndPromptOrigin backfills
+        // hadAllOrigins from the (non-empty) stored origins. Mirror that same
+        // "has any committed origin ⇒ done picking" signal here so the live
+        // behaviour matches the post-relog behaviour and no relog is needed.
         com.cyberday1.neoorigins.attachment.PlayerOriginData pod =
             sp.getData(com.cyberday1.neoorigins.attachment.OriginAttachments.originData());
-        if (!pod.isHadAllOrigins() && pod.getOrbUseCount() == 0 && !pod.isPickerAbandoned()) {
+        boolean stillFirstPicking = !pod.isHadAllOrigins() && pod.getOrigins().isEmpty();
+        if (stillFirstPicking && pod.getOrbUseCount() == 0 && !pod.isPickerAbandoned()) {
             event.setCanceled(true);
             return;
         }
@@ -304,11 +324,23 @@ public class CombatPowerEvents {
                 Registries.DAMAGE_TYPE, ResourceLocation.parse(f.substring(1))));
             return source.is(tag);
         }
-        // Match against both the msgId (camelCase, e.g. "flyIntoWall") and
-        // the registry key path (snake_case, e.g. "fly_into_wall") so pack
+        var typeKey = source.typeHolder().unwrapKey();
+        // If the filter explicitly specifies a namespace (e.g.
+        // "irons_spellbooks:fire_magic"), compare against the full registry-key
+        // ResourceLocation so cross-mod damage types match unambiguously. A bare
+        // path like "fire_magic" would otherwise be silently dropped. Detect an
+        // explicit namespace by the presence of a ':' BEFORE parsing, since
+        // ResourceLocation.parse would inject the default "minecraft:" namespace.
+        if (filter.indexOf(':') >= 0) {
+            var parsed = ResourceLocation.tryParse(filter);
+            return parsed != null
+                && typeKey.isPresent()
+                && typeKey.get().location().equals(parsed);
+        }
+        // Bare path: match against both the msgId (camelCase, e.g. "flyIntoWall")
+        // and the registry key path (snake_case, e.g. "fly_into_wall") so pack
         // authors can use either convention.
         if (source.getMsgId().equalsIgnoreCase(filter)) return true;
-        var typeKey = source.typeHolder().unwrapKey();
         return typeKey.isPresent()
             && typeKey.get().location().getPath().equalsIgnoreCase(filter);
     }
@@ -432,6 +464,14 @@ public class CombatPowerEvents {
             // projectile was fired. Invoked with the ProjectileHitContext installed
             // on ActionContextHolder so area_of_effect can center on the impact
             // point rather than the (now-stale) player position.
+            //
+            // The on_hit path fires for BOTH entity and block impacts. On a block
+            // impact the ray-trace result is a BlockHitResult, which doubles as the
+            // block-target seam (item 5): ActionParser.extractBlockTarget reads the
+            // impacted BlockPos straight off this ProjectileHitContext, so the
+            // block-target verbs (strip/till/path/grow/transform_block) and the
+            // block_target_action wrapper resolve the hit block when used directly
+            // as an on_hit_action — no separate on_block_hit_action plumbing needed.
             var onHit = com.cyberday1.neoorigins.service.ProjectileActionRegistry.drain(proj.getUUID());
             if (onHit != null) {
                 Object prev = com.cyberday1.neoorigins.service.ActionContextHolder.set(ctx);

@@ -91,6 +91,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         "apoli:overlay",
         "origins:modify_status_effect_amplifier", "apace:modify_status_effect_amplifier",
         "origins:modify_falling",       "apace:modify_falling",
+        "origins:modify_velocity",      "apace:modify_velocity",
         // Phase 8: Origins++ compat
         "origins:conditioned_restrict_armor", "apace:conditioned_restrict_armor",
         "origins:freeze",               "apace:freeze",
@@ -154,6 +155,14 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         NumericModifierRegistry.clearAll();
         CompatAttachments.clearResourceMeta();
         com.cyberday1.neoorigins.service.InlineRecipeRegistry.resetPending();
+        com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.clear();
+
+        // Rewrite apoli:/apugli: power types to the canonical origins: namespace
+        // before expansion + dispatch, so packs that use the Apoli namespace are
+        // recognized by ROUTE_B_TYPES (and apoli:multiple is expanded).
+        for (JsonElement el : data.values()) {
+            if (el.isJsonObject()) OriginsFormatDetector.canonicalizePowerType(el.getAsJsonObject());
+        }
 
         // Inline-expand any origins:multiple entries so sub-power JSONs are accessible.
         Map<ResourceLocation, JsonObject> expanded = inlineExpand(data);
@@ -165,7 +174,9 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         for (var entry : expanded.entrySet()) {
             ResourceLocation id   = entry.getKey();
             JsonObject json = entry.getValue();
-            String type = OriginsFormatDetector.getType(json);
+            // Canonicalize again to cover synthetic sub-powers emitted by
+            // multiple-expansion (their nested types never pass the pre-loop).
+            String type = OriginsFormatDetector.canonicalizePowerType(json);
 
             // modify_damage_taken/dealt are Route A types normally, but when a
             // condition is present we fall through to Route B so the condition
@@ -230,6 +241,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         // appears immediately above it in the log.
         CompatWarningCollector.emitSummaryAndEndSession();
         NeoOrigins.LOGGER.info("[CompatB] Injected {} Route B powers", injected.size());
+        com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.logSummary();
         } finally {
             // Defensive: if anything above threw, the session is still open
             // and would silently swallow warnings for the rest of the JVM.
@@ -258,7 +270,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             Map.entry("origins:like_water",          () -> json("neoorigins:ignore_water")),
             Map.entry("origins:aquatic",             () -> json("neoorigins:dries_out")),
             Map.entry("origins:water_vision",        () -> json("neoorigins:lava_vision")),
-            Map.entry("origins:aqua_affinity",       () -> json("neoorigins:underwater_mining")),
+            Map.entry("origins:aqua_affinity",       () -> json("neoorigins:underwater_mining_speed")),
             Map.entry("origins:conduit_power_on_land", () -> json("neoorigins:conduit_power")),
             Map.entry("origins:air_from_potions",    () -> json("neoorigins:water_breathing")),
             Map.entry("origins:water_breathing",     () -> json("neoorigins:water_breathing")),
@@ -453,11 +465,13 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             case "origins:conditioned_status_effect",  "apace:conditioned_status_effect"  -> parseConditionedStatusEffect(id, json);
             case "origins:action_on_being_hit",        "apace:action_on_being_hit",
                  "origins:self_action_when_hit",       "apace:self_action_when_hit",
-                 "origins:self_action_on_hit",         "apace:self_action_on_hit",
-                 "origins:action_on_hit",              "apace:action_on_hit",
                  "origins:action_when_hit",            "apace:action_when_hit",
                  "origins:action_when_damage_taken",   "apace:action_when_damage_taken",
                  "origins:attacker_action_when_hit",   "apace:attacker_action_when_hit"   -> parseSelfActionWhenHit(id, json);
+            // self_action_on_hit / action_on_hit fire when the HOLDER DEALS damage —
+            // a different direction from the "when hit" group above.
+            case "origins:self_action_on_hit",         "apace:self_action_on_hit",
+                 "origins:action_on_hit",              "apace:action_on_hit"              -> parseSelfActionOnHit(id, json);
             case "origins:damage_over_time",           "apace:damage_over_time"           -> parseDamageOverTime(id, json);
             // Phase 3: New Route B types
             case "origins:fire_projectile",            "apace:fire_projectile"            -> parseFireProjectile(id, json);
@@ -488,6 +502,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             case "apoli:overlay"                                                          -> parseOverlay(id, json);
             case "origins:modify_status_effect_amplifier", "apace:modify_status_effect_amplifier" -> parseModifyEffectAmplifier(id, json);
             case "origins:modify_falling",             "apace:modify_falling"             -> parseModifyFalling(id, json);
+            case "origins:modify_velocity",            "apace:modify_velocity"            -> parseModifyVelocity(id, json);
             // Phase 8: Origins++ compat
             case "origins:conditioned_restrict_armor", "apace:conditioned_restrict_armor" -> parseConditionedRestrictArmor(id, json);
             case "origins:freeze",                     "apace:freeze"                     -> parseFreeze(id, json);
@@ -507,19 +522,13 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
     private CompatPower.Config parseConditionedModifyDamageTaken(ResourceLocation id, JsonObject json) {
         String idStr = id.toString();
 
-        // Extract the multiplier from the Origins modifier object. All operations
+        // Extract the multiplier from the Origins modifier(s). All operations
         // collapse to (1 + value) — same lossy mapping as Route A's translateModifyDamage.
-        // Origins packs use either "value" or "amount" for the modifier number.
-        float multiplier = 1.0f;
-        if (json.has("modifier") && json.get("modifier").isJsonObject()) {
-            JsonObject mod = json.getAsJsonObject("modifier");
-            double val = mod.has("value") ? mod.get("value").getAsDouble()
-                : mod.has("amount") ? mod.get("amount").getAsDouble() : Double.NaN;
-            if (!Double.isNaN(val)) {
-                String op = mod.has("operation") ? mod.get("operation").getAsString() : "addition";
-                multiplier = "set_total".equals(op) ? (float) Math.max(0, 1.0 + val) : (float)(1.0 + val);
-            }
-        }
+        // parseModifierList accepts both singular "modifier" and plural "modifiers";
+        // parseSingleModifier accepts both "value" and "amount" per entry. Mirrors
+        // the precedent set by parseModifyFood / parseNumericModifier so real
+        // Apoli packs (which commonly emit `modifiers`/`amount`) don't silently no-op.
+        float multiplier = collapseDamageModifiers(parseModifierList(json, "modifier"));
 
         // Optional damage type filter — msgId-based, mirrors native ModifyDamagePower.
         String damageTypeFilter = null;
@@ -567,16 +576,9 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
     private CompatPower.Config parseConditionedModifyDamageDealt(ResourceLocation id, JsonObject json) {
         String idStr = id.toString();
 
-        float multiplier = 1.0f;
-        if (json.has("modifier") && json.get("modifier").isJsonObject()) {
-            JsonObject mod = json.getAsJsonObject("modifier");
-            double val = mod.has("value") ? mod.get("value").getAsDouble()
-                : mod.has("amount") ? mod.get("amount").getAsDouble() : Double.NaN;
-            if (!Double.isNaN(val)) {
-                String op = mod.has("operation") ? mod.get("operation").getAsString() : "addition";
-                multiplier = "set_total".equals(op) ? (float) Math.max(0, 1.0 + val) : (float)(1.0 + val);
-            }
-        }
+        // See parseConditionedModifyDamageTaken — same singular/plural and value/amount
+        // tolerance for symmetry with Apoli.
+        float multiplier = collapseDamageModifiers(parseModifierList(json, "modifier"));
 
         String damageTypeFilter = null;
         ResourceLocation damageTypeKeyFilter = null;
@@ -620,6 +622,42 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             .build();
     }
 
+    /**
+     * Classified activation key for an Apoli "active" power (active_self, toggle, launch).
+     * A power's {@code "key"} is either a string or {@code {"key": ..., "continuous": ...}}.
+     * The key then falls into one of three buckets:
+     *   - slotKey: one of the 6 hardcoded skill slots (primary/secondary active, toolbar, pick)
+     *   - vanillaInputKey: a movement/use/attack key the server can poll directly
+     *   - namedHotkey: a pack-declared translation key (must be registered into PowerKeybindRegistry)
+     */
+    private record KeySpec(String key, boolean continuous, boolean slotKey, boolean vanillaInputKey) {
+        boolean namedHotkey() { return !slotKey && !vanillaInputKey; }
+    }
+
+    private static KeySpec classifyKey(JsonObject json, String defaultKey) {
+        String key = defaultKey;
+        boolean continuous = false;
+        if (json.has("key")) {
+            var keyEl = json.get("key");
+            if (keyEl.isJsonPrimitive()) {
+                key = keyEl.getAsString();
+            } else if (keyEl.isJsonObject()) {
+                var keyObj = keyEl.getAsJsonObject();
+                key = keyObj.has("key") ? keyObj.get("key").getAsString() : key;
+                continuous = keyObj.has("continuous") && keyObj.get("continuous").getAsBoolean();
+            }
+        }
+        boolean slotKey = key.contains("primary_active") || key.contains("secondary_active")
+            || key.contains("loadToolbarActivator") || key.contains("saveToolbarActivator")
+            || key.contains("pickItem");
+        boolean vanillaInputKey = switch (key) {
+            case "key.sneak", "key.use", "key.attack", "key.jump", "key.sprint",
+                 "key.forward", "key.back", "key.left", "key.right" -> true;
+            default -> false;
+        };
+        return new KeySpec(key, continuous, slotKey, vanillaInputKey);
+    }
+
     private CompatPower.Config parseActiveSelf(ResourceLocation id, JsonObject json) {
         String idStr = id.toString();
         JsonObject actionJson = json.has("entity_action") ? json.getAsJsonObject("entity_action")
@@ -634,18 +672,9 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
 
         // Key can be a string ("key.origins.primary_active") or an object
         // ({"key": "key.origins.primary_active", "continuous": true}).
-        String key = "key.origins.primary_active";
-        boolean continuous = false;
-        if (json.has("key")) {
-            var keyEl = json.get("key");
-            if (keyEl.isJsonPrimitive()) {
-                key = keyEl.getAsString();
-            } else if (keyEl.isJsonObject()) {
-                var keyObj = keyEl.getAsJsonObject();
-                key = keyObj.has("key") ? keyObj.get("key").getAsString() : key;
-                continuous = keyObj.has("continuous") && keyObj.get("continuous").getAsBoolean();
-            }
-        }
+        KeySpec ks = classifyKey(json, "key.origins.primary_active");
+        String key = ks.key();
+        boolean continuous = ks.continuous();
 
         // Parse the optional condition gate
         EntityCondition condition = json.has("condition")
@@ -655,9 +684,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         // Skill-slot keys: primary_active, secondary_active, and the two toolbar
         // keys (loadToolbarActivator, saveToolbarActivator) which have no server-side
         // input state and must be mapped to skill slots to be usable.
-        boolean isSlotKey = key.contains("primary_active") || key.contains("secondary_active")
-            || key.contains("loadToolbarActivator") || key.contains("saveToolbarActivator")
-            || key.contains("pickItem");
+        boolean isSlotKey = ks.slotKey();
         // Continuous slot powers DON'T use onActivated — they need every-tick
         // execution which onActivated (single-fire per keypress) can't provide.
         if (isSlotKey && !continuous) {
@@ -675,24 +702,52 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                 .build();
         }
 
-        // Non-slot keys: fire from onTick when the corresponding input is held.
-        // When continuous=false, uses edge detection (fire once per press).
-        // When continuous=true, fires every tick while the key is held.
+        // Non-slot keys come in two flavors:
+        //   1. Vanilla input keys (sneak/use/attack/jump/movement) — polled from
+        //      onTick because the server knows the input state directly.
+        //   2. Pack-declared translation keys (e.g. "deanos_origins.key.origins.2")
+        //      — registered into PowerKeybindRegistry and fired by client press
+        //      via ActivatePowerByKeyPayload. The CompatPower itself becomes a
+        //      no-op so it doesn't tick uselessly.
         final String finalKey = key;
         final String finalIdStr = idStr;
         final boolean isContinuous = continuous;
+
+        boolean isVanillaInputKey = ks.vanillaInputKey();
+
+        if (!isVanillaInputKey) {
+            // Hotkey path: register into PowerKeybindRegistry so a client press
+            // routes here. The power itself is a marker (no onActivated, no
+            // onTick) so it doesn't double-fire from the slot system.
+            com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.register(finalKey,
+                new com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.Binding(
+                    id, action, condition, cooldown, isContinuous));
+            return CompatPower.Config.builder()
+                .cooldownTicks(cooldown)
+                .build();
+        }
+
         return CompatPower.Config.builder()
             .onTick(player -> {
                 boolean pressed = switch (finalKey) {
                     case "key.sneak"   -> player.isShiftKeyDown();
-                    case "key.use"     -> player.isUsingItem();
+                    // key.use = vanilla right-click. isUsingItem() only covers item-use
+                    // ANIMATIONS (food/bow/shield) and is never true for a tap right-click
+                    // on a plain/empty hand — which is how Apoli spell active_self powers
+                    // are cast. Read the right-click tick stamped by CompatEventPowers.
+                    case "key.use"     -> CompatPlayerState.isUseKeyDown(player);
                     case "key.attack"  -> player.swinging;
+                    case "key.sprint"  -> player.isSprinting();
                     case "key.jump"    -> !player.onGround() && player.getDeltaMovement().y > 0;
                     case "key.forward" -> player.zza > 0;
                     case "key.back"    -> player.zza < 0;
                     case "key.left"    -> player.xxa > 0;
                     case "key.right"   -> player.xxa < 0;
                     default -> {
+                        // Defensive: isVanillaInputKey above already excludes
+                        // anything that would land here, so this is unreachable
+                        // unless someone adds a new vanilla key without updating
+                        // both sites.
                         if (player.tickCount == 1) {
                             NeoOrigins.LOGGER.warn("[CompatB] active_self key '{}' has no server-side input state — power {} will not fire", finalKey, finalIdStr);
                         }
@@ -700,8 +755,22 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                     }
                 };
                 if (isContinuous) {
-                    // Fire every tick while held
+                    // Honour a declared cooldown even on a continuous (held-key)
+                    // power: previously this fired EVERY tick while held, ignoring
+                    // `cooldown` entirely. Gating here throttles to once per
+                    // `cooldown` ticks. It also breaks the swing_hand self-feedback
+                    // loop on key.attack: the action's own swing_hand re-arms
+                    // `player.swinging` (the held signal), so without a gate it kept
+                    // firing after release until the resource drained. Because the
+                    // cooldown (e.g. 10) outlasts the ~6-tick swing animation, the
+                    // re-armed swing lapses before the next cooldown window opens,
+                    // so release actually stops it.
                     if (pressed && condition.test(player)) {
+                        if (cooldown > 0) {
+                            PlayerOriginData data = player.getData(OriginAttachments.originData());
+                            if (data.isOnCooldown(idStr, player.tickCount)) return;
+                            data.setCooldown(idStr, player.tickCount, cooldown);
+                        }
                         action.execute(player);
                     }
                 } else {
@@ -845,13 +914,21 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         String label = "Resource";
         int color = 0xFF55AAFF;
         boolean hidden = false;
+        // Apoli hud_render sprite indices into resource_bar.png; -1 == unset
+        // (HUD then draws a color-tinted fill inside the frame instead).
+        int barIndex = -1;
+        int iconIndex = -1;
+        // Apoli hud_render.sprite_location overrides which sheet the bar/icon render
+        // against (community packs ship restyled bars at the same coordinates). null
+        // == use our vendored default resource_bar.png. The referenced texture is
+        // normally provided by the source mod/datapack — we pass the id through verbatim.
+        String spriteLocation = null;
         // Boolean toggles (min=0, max=1) are internal state, not player-facing bars.
         if (min == 0 && max == 1) hidden = true;
         if (json.has("hud_render") && json.get("hud_render").isJsonObject()) {
             JsonObject hud = json.getAsJsonObject("hud_render");
-            if (hud.has("bar_index")) {
-                // Apoli hud_render has bar_index, sprite_location, condition — we
-                // use a flat color bar, so just derive a label from the power ID.
+            if (hud.has("sprite_location")) {
+                spriteLocation = hud.get("sprite_location").getAsString();
             }
             // Origins compat: should_render=false hides the bar
             if (hud.has("should_render") && !hud.get("should_render").getAsBoolean()) {
@@ -862,6 +939,13 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             if (hud.has("condition")) {
                 hidden = true;
             }
+            // Apoli sprite-sheet indices: bar_index picks the fill row,
+            // icon_index picks the icon column in resource_bar.png. Apoli
+            // defaults both to 0, so a hud_render block (even without explicit
+            // indices) renders with the real Apoli texture — only resources
+            // with NO hud_render keep -1 and fall back to a color-tinted fill.
+            barIndex  = hud.has("bar_index")  ? hud.get("bar_index").getAsInt()  : 0;
+            iconIndex = hud.has("icon_index") ? hud.get("icon_index").getAsInt() : 0;
         }
         // Derive a human-readable label from the power ID path segment.
         String path = id.getPath();
@@ -879,7 +963,7 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         label = sb.toString();
 
         CompatAttachments.registerResourceMeta(key,
-            new CompatAttachments.ResourceMeta(min, max, label, color, hidden));
+            new CompatAttachments.ResourceMeta(min, max, label, color, hidden, barIndex, iconIndex, spriteLocation));
 
         return CompatPower.Config.builder()
             .onGranted(player -> {
@@ -919,22 +1003,39 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
     }
 
     private CompatPower.Config parseToggle(ResourceLocation id, JsonObject json) {
-        String key = id.toString();
+        String stateKey = id.toString();
         boolean defaultActive = !json.has("active") || json.get("active").getAsBoolean();
 
         EntityAction activeAction   = json.has("active_action")
-            ? ActionParser.parse(json.getAsJsonObject("active_action"),   key) : EntityAction.noop();
+            ? ActionParser.parse(json.getAsJsonObject("active_action"),   stateKey) : EntityAction.noop();
         EntityAction inactiveAction = json.has("inactive_action")
-            ? ActionParser.parse(json.getAsJsonObject("inactive_action"), key) : EntityAction.noop();
+            ? ActionParser.parse(json.getAsJsonObject("inactive_action"), stateKey) : EntityAction.noop();
 
-        return CompatPower.Config.builder()
-            .onGranted(player -> player.getData(CompatAttachments.toggleState()).set(key, defaultActive))
-            .onActivated(player -> {
-                boolean next = player.getData(CompatAttachments.toggleState()).toggle(key, defaultActive);
-                if (next) activeAction.execute(player);
-                else inactiveAction.execute(player);
-            })
-            .build();
+        // The toggle behavior itself: flip the stored state, run the matching action.
+        EntityAction toggleAction = player -> {
+            boolean next = player.getData(CompatAttachments.toggleState()).toggle(stateKey, defaultActive);
+            if (next) activeAction.execute(player);
+            else inactiveAction.execute(player);
+        };
+
+        var builder = CompatPower.Config.builder()
+            .onGranted(player -> player.getData(CompatAttachments.toggleState()).set(stateKey, defaultActive));
+
+        // A toggle can declare a pack-defined hotkey ("key": "...") just like active_self.
+        // If it does, register it so a client press routes here; otherwise it defaults to
+        // the primary-active skill slot via onActivated.
+        KeySpec ks = classifyKey(json, "key.origins.primary_active");
+        if (ks.namedHotkey()) {
+            int cooldown = json.has("cooldown") ? json.get("cooldown").getAsInt() : 0;
+            EntityCondition condition = json.has("condition")
+                ? ConditionParser.parse(json.getAsJsonObject("condition"), stateKey)
+                : EntityCondition.alwaysTrue();
+            com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.register(ks.key(),
+                new com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.Binding(
+                    id, toggleAction, condition, cooldown, ks.continuous()));
+            return builder.cooldownTicks(cooldown).build();
+        }
+        return builder.onActivated(toggleAction::execute).build();
     }
 
     private CompatPower.Config parseConditionedAttribute(ResourceLocation id, JsonObject json) {
@@ -987,6 +1088,16 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         double value = modObj.has("value")  ? modObj.get("value").getAsDouble()
                      : modObj.has("amount") ? modObj.get("amount").getAsDouble() : 0.0;
         String op = modObj.has("operation") ? modObj.get("operation").getAsString() : "add_value";
+        // Apoli clamp/set ops (min/max/set) have no vanilla AttributeModifier
+        // equivalent — applying them as add_value corrupts the attribute (a cap
+        // becomes a flat bonus). Skip the power rather than mis-apply it.
+        if (!OriginsOperationMapper.isRepresentable(op)) {
+            NeoOrigins.LOGGER.warn("[CompatB] {}: attribute operation '{}' (clamp/set) has no vanilla "
+                + "equivalent — power will no-op", idStr, op);
+            CompatTranslationLog.skip(id, "origins:conditioned_attribute",
+                "operation '" + op + "' (clamp/set) cannot be represented as a vanilla attribute modifier");
+            return null;
+        }
         AttributeModifier.Operation operation = switch (OriginsOperationMapper.mapOperation(op)) {
             case "add_multiplied_base"  -> AttributeModifier.Operation.ADD_MULTIPLIED_BASE;
             case "add_multiplied_total" -> AttributeModifier.Operation.ADD_MULTIPLIED_TOTAL;
@@ -1124,6 +1235,73 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
             .build();
     }
 
+    /**
+     * {@code apoli:modify_velocity} — per-axis value-modifier applied to the
+     * player's movement. Apoli applies this inside its {@code Entity.move}
+     * mixin, transforming the movement vector each step on the {@code axes}
+     * the power enables (default: all three).
+     *
+     * <p>This is a server-side approximation: each tick we read the player's
+     * delta movement, run the parsed modifiers through {@link OriginsModifierMath}
+     * on every enabled axis, write it back and flag {@code hurtMarked} so the
+     * change is synced to the client (the same mechanism {@link #parseLaunch}
+     * uses). A pixel-perfect port would need a shared {@code Entity.move} mixin
+     * plus client-synced power data; this loads + functions for the common
+     * speed/restriction cases without that subsystem.
+     */
+    private CompatPower.Config parseModifyVelocity(ResourceLocation id, JsonObject json) {
+        String idStr = id.toString();
+        java.util.List<OriginsModifierMath.Modifier> mods = parseModifierList(json, "modifier");
+        if (mods.isEmpty()) {
+            NeoOrigins.LOGGER.warn("[CompatB] modify_velocity '{}' missing modifier/modifiers — skipped", id);
+            return null;
+        }
+
+        // The condition gates whether the velocity transform applies this tick.
+        // CRITICAL: many real packs use modify_velocity to zero velocity (a "stop"
+        // effect) gated on a resource — applying it unconditionally would freeze
+        // the player. If the condition can't be parsed, fail closed (no-op power)
+        // rather than risk applying it always.
+        CompatPolicy.resetFailClosedCount();
+        EntityCondition condition = json.has("condition")
+            ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr)
+            : EntityCondition.alwaysTrue();
+        if (CompatPolicy.failClosedCount() > 0) {
+            NeoOrigins.LOGGER.warn("[CompatB] modify_velocity {} has unsupported condition(s) — refusing to compile", idStr);
+            return null;
+        }
+
+        // Apoli "axes" is an axis-set; default is all three. Accept the array
+        // form (["x","z"]) and treat a missing field as "all axes".
+        boolean applyX = true, applyY = true, applyZ = true;
+        if (json.has("axes") && json.get("axes").isJsonArray()) {
+            applyX = applyY = applyZ = false;
+            for (JsonElement el : json.getAsJsonArray("axes")) {
+                switch (el.getAsString().toLowerCase(java.util.Locale.ROOT)) {
+                    case "x" -> applyX = true;
+                    case "y" -> applyY = true;
+                    case "z" -> applyZ = true;
+                    default -> { /* ignore unknown axis token */ }
+                }
+            }
+        }
+        final boolean fx = applyX, fy = applyY, fz = applyZ;
+
+        return CompatPower.Config.builder()
+            .onTick(player -> {
+                if (!condition.test(player)) return;
+                Vec3 v = player.getDeltaMovement();
+                double nx = fx ? OriginsModifierMath.apply(v.x, mods) : v.x;
+                double ny = fy ? OriginsModifierMath.apply(v.y, mods) : v.y;
+                double nz = fz ? OriginsModifierMath.apply(v.z, mods) : v.z;
+                if (nx != v.x || ny != v.y || nz != v.z) {
+                    player.setDeltaMovement(nx, ny, nz);
+                    player.hurtMarked = true; // sync the velocity change to the client
+                }
+            })
+            .build();
+    }
+
     /** apoli:overlay — screen overlay effect. Parsed as a no-op since overlay rendering
      *  requires client-side hooks not yet ported. The power loads successfully so it
      *  doesn't count against the compat power-ratio threshold. */
@@ -1232,6 +1410,43 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                             && attacker != player) {
                         biAction.execute(player, attacker);
                     }
+                }
+            })
+            .build();
+    }
+
+    /**
+     * Apoli {@code self_action_on_hit} / {@code action_on_hit} — fires when the
+     * HOLDER deals damage to a living entity. {@code entity_action} runs on the
+     * holder; {@code bientity_action} runs with (actor=holder, target=victim).
+     * Dispatched from CombatPowerEvents' player-as-attacker block via the
+     * CompatPower {@code onDealDamage} hook, which passes the victim directly.
+     */
+    private CompatPower.Config parseSelfActionOnHit(ResourceLocation id, JsonObject json) {
+        String idStr = id.toString();
+        EntityAction action = json.has("entity_action")
+            ? ActionParser.parse(json.getAsJsonObject("entity_action"), idStr)
+            : EntityAction.noop();
+        com.cyberday1.neoorigins.compat.action.BiEntityAction biAction = json.has("bientity_action")
+            ? com.cyberday1.neoorigins.compat.action.BiEntityActionParser.parse(
+                json.getAsJsonObject("bientity_action"), idStr)
+            : com.cyberday1.neoorigins.compat.action.BiEntityAction.noop();
+        int cooldown = json.has("cooldown") ? json.get("cooldown").getAsInt() : 0;
+        EntityCondition condition = json.has("condition")
+            ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr)
+            : EntityCondition.alwaysTrue();
+        return CompatPower.Config.builder()
+            .cooldownTicks(cooldown)
+            .onDealDamage((player, target) -> {
+                if (!condition.test(player)) return;
+                if (cooldown > 0) {
+                    PlayerOriginData data = player.getData(OriginAttachments.originData());
+                    if (data.isOnCooldown(idStr, player.tickCount)) return;
+                    data.setCooldown(idStr, player.tickCount, cooldown);
+                }
+                action.execute(player);
+                if (biAction != com.cyberday1.neoorigins.compat.action.BiEntityAction.NOOP) {
+                    biAction.execute(player, target);
                 }
             })
             .build();
@@ -1388,16 +1603,34 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         float speed = json.has("speed") ? json.get("speed").getAsFloat() : 1.0f;
         int cooldown = json.has("cooldown") ? json.get("cooldown").getAsInt() : 0;
 
-        return CompatPower.Config.builder()
-            .cooldownTicks(cooldown)
+        EntityAction launchAction = player -> {
+            player.push(0, speed, 0);
+            player.hurtMarked = true;
+        };
+
+        var builder = CompatPower.Config.builder().cooldownTicks(cooldown);
+
+        // launch can be bound to a pack-declared hotkey; register it if so. Cooldown is
+        // enforced by PowerKeybindRegistry.dispatch for the named-key path, so the action
+        // itself stays cooldown-free there to avoid double-gating.
+        KeySpec ks = classifyKey(json, "key.origins.primary_active");
+        if (ks.namedHotkey()) {
+            EntityCondition condition = json.has("condition")
+                ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr)
+                : EntityCondition.alwaysTrue();
+            com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.register(ks.key(),
+                new com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry.Binding(
+                    id, launchAction, condition, cooldown, ks.continuous()));
+            return builder.build();
+        }
+        return builder
             .onActivated(player -> {
                 if (cooldown > 0) {
                     PlayerOriginData data = player.getData(OriginAttachments.originData());
                     if (data.isOnCooldown(idStr, player.tickCount)) return;
                     data.setCooldown(idStr, player.tickCount, cooldown);
                 }
-                player.push(0, speed, 0);
-                player.hurtMarked = true;
+                launchAction.execute(player);
             })
             .build();
     }
@@ -1467,10 +1700,17 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
 
     private CompatPower.Config parsePreventItemUse(ResourceLocation id, JsonObject json) {
         String idStr = id.toString();
+        // The power-level `condition` is the HOLDER gate (e.g. mainhand empty +
+        // offhand holds a spell item). `item_condition` is the TARGET gate (which
+        // item is being used). Both must be honoured, or the prevention fires
+        // unconditionally — which is exactly the Mage "blocks randomly" bug.
+        EntityCondition condition = json.has("condition")
+            ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr) : null;
         var itemPred = json.has("item_condition")
             ? compileItemPredicate(json.getAsJsonObject("item_condition")) : null;
-        var data = CompatPlayerState.EventPowerData.withItemPredicate(
-            idStr, CompatPlayerState.EventType.PREVENT_ITEM_USE, itemPred);
+        var data = new CompatPlayerState.EventPowerData(
+            idStr, CompatPlayerState.EventType.PREVENT_ITEM_USE,
+            condition, itemPred, null, null);
 
         return CompatPower.Config.builder()
             .onGranted(player -> CompatPlayerState.register(player, data))
@@ -1554,10 +1794,16 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
 
     private CompatPower.Config parsePreventBlockUse(ResourceLocation id, JsonObject json) {
         String idStr = id.toString();
+        // Power-level `condition` = HOLDER gate; `block_condition` = TARGET (block)
+        // gate. Dropping the holder gate made block-use prevention fire whenever
+        // the power was granted (the Mage "can't place blocks" bug).
+        EntityCondition condition = json.has("condition")
+            ? ConditionParser.parse(json.getAsJsonObject("condition"), idStr) : null;
         var blockPred = json.has("block_condition")
             ? compileBlockPredicate(json.getAsJsonObject("block_condition")) : null;
-        var data = CompatPlayerState.EventPowerData.withBlockPredicate(
-            idStr, CompatPlayerState.EventType.PREVENT_BLOCK_USE, blockPred);
+        var data = new CompatPlayerState.EventPowerData(
+            idStr, CompatPlayerState.EventType.PREVENT_BLOCK_USE,
+            condition, null, blockPred, null);
 
         return CompatPower.Config.builder()
             .onGranted(player -> CompatPlayerState.register(player, data))
@@ -1579,22 +1825,33 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
     /**
      * Shared parser for {@code modify_lava_speed} and {@code modify_xp_gain}
      * — both shape-identical Apoli verbs of the form
-     * {@code { "modifier": { "operation": ..., "value": ... } }}. Registers
-     * the resolved numeric entry against the player's UUID so the consumer
-     * (mixin for lava-speed, event handler for xp-gain) can apply it.
+     * {@code { "modifier": { "operation": ..., "value": ... } }}.
+     *
+     * <p>Accepts all four Apoli-author conventions, matching the precedent
+     * set by {@link #parseModifyFood} and {@link #parseConditionedModifyDamageTaken}:
+     * <ul>
+     *   <li>singular {@code "modifier"} object or plural {@code "modifiers"} array</li>
+     *   <li>per-modifier value field {@code "value"} or {@code "amount"}</li>
+     * </ul>
+     * The schema-vs-parser drift here previously caused real Apoli packs (which
+     * commonly emit {@code amount} and {@code modifiers}) to silently no-op.
+     *
+     * <p>Registers the resolved numeric entries against the player's UUID so
+     * the consumer (mixin for lava-speed, event handler for xp-gain) can
+     * apply them.
      */
     private CompatPower.Config parseNumericModifier(ResourceLocation id, JsonObject json,
                                                      NumericModifierRegistry.Kind kind) {
         String idStr = id.toString();
-        if (!json.has("modifier") || !json.get("modifier").isJsonObject()) {
-            NeoOrigins.LOGGER.warn("[CompatB] {} '{}' missing modifier object — skipped", kind, id);
+        // parseModifierList accepts both singular "modifier" and plural "modifiers",
+        // and parseSingleModifier accepts both "value" and "amount" inside each entry.
+        java.util.List<OriginsModifierMath.Modifier> mods = parseModifierList(json, "modifier");
+        if (mods.isEmpty()) {
+            NeoOrigins.LOGGER.warn("[CompatB] {} '{}' missing modifier/modifiers — skipped", kind, id);
             return null;
         }
-        JsonObject mod = json.getAsJsonObject("modifier");
-        String operation = mod.has("operation") ? mod.get("operation").getAsString() : "addition";
-        double value = mod.has("value") ? mod.get("value").getAsDouble() : 0.0;
         return CompatPower.Config.builder()
-            .onGranted(player -> NumericModifierRegistry.register(player, kind, idStr, operation, value))
+            .onGranted(player -> NumericModifierRegistry.register(player, kind, idStr, mods))
             .onRevoked(player -> NumericModifierRegistry.unregister(player, kind, idStr))
             .build();
     }
@@ -1727,6 +1984,32 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
         double value = mod.has("value") ? mod.get("value").getAsDouble()
                      : mod.has("amount") ? mod.get("amount").getAsDouble() : 0.0;
         return new OriginsModifierMath.Modifier(operation, value);
+    }
+
+    /**
+     * Collapse a list of Apoli-shape modifier entries into a single damage
+     * multiplier, preserving the same lossy per-entry mapping the singular
+     * pre-v2.1.6 path used: {@code addition}/{@code multiply_*} contribute
+     * additively to {@code 1 + Σvalue}; {@code set_total} overrides to
+     * {@code max(0, 1 + value)} (clamped non-negative, last-write-wins among
+     * multiple set_total entries — matches the single-modifier behavior).
+     * Empty list ⇒ 1.0 (no-op), matching the previous "missing modifier"
+     * fall-through that left {@code multiplier = 1.0f}.
+     */
+    private static float collapseDamageModifiers(java.util.List<OriginsModifierMath.Modifier> mods) {
+        if (mods == null || mods.isEmpty()) return 1.0f;
+        double additive = 0.0;
+        Double setTotal = null;
+        for (OriginsModifierMath.Modifier m : mods) {
+            String op = m.operation() == null ? "addition" : m.operation();
+            if ("set_total".equals(op)) {
+                setTotal = m.value();
+            } else {
+                additive += m.value();
+            }
+        }
+        double result = setTotal != null ? Math.max(0.0, 1.0 + setTotal) : (1.0 + additive);
+        return (float) result;
     }
 
     // ---- Compile-time predicate builders for event powers ----
@@ -2011,17 +2294,19 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
      * {@code origins:recipe} — unlocks a recipe for the player when the
      * power is granted. The {@code recipe} field may be either:
      * <ul>
-     *   <li>A string id pointing to an existing registered recipe — the
-     *       original behavior, the power just calls {@code awardRecipes}.</li>
+     *   <li>A string id pointing to an existing registered recipe — the live
+     *       recipe is wrapped in an {@code OriginGatedRecipe(has_power)} in
+     *       place so only holders of this power can craft it.</li>
      *   <li>An inline recipe JSON object (full {@code type} + {@code ingredients}
      *       + {@code result} shape). The inline recipe is registered via
      *       {@link com.cyberday1.neoorigins.service.InlineRecipeRegistry}
-     *       under a synthesized id, then the power gates {@code awardRecipes}
-     *       on that id. Caveat: the recipe ends up globally craftable; the
-     *       inline form only controls recipe-book visibility, not the craft
-     *       gate. Most packs ship Origins-specific items as ingredients so
-     *       this matches their expected semantics anyway.</li>
+     *       under a synthesized id and likewise wrapped with a {@code has_power}
+     *       craft gate.</li>
      * </ul>
+     *
+     * <p>In both cases {@code onGranted} still calls {@code awardRecipes} so the
+     * recipe is visible in the holder's recipe book; the gate enforces the craft
+     * restriction at the crafting table (see {@link OriginGatedRecipe}).
      */
     private CompatPower.Config parseRecipe(ResourceLocation id, JsonObject json) {
         if (!json.has("recipe")) {
@@ -2037,13 +2322,19 @@ public class OriginsCompatPowerLoader extends SimplePreparableReloadListener<Map
                     id, recipeEl.getAsString());
                 return null;
             }
+            // Gate the referenced recipe so only holders of this power can craft
+            // it — InlineRecipeRegistry wraps the live recipe in an
+            // OriginGatedRecipe(has_power) after the datapack reload completes.
+            com.cyberday1.neoorigins.service.InlineRecipeRegistry.registerRefGate(recipeLoc, id);
         } else if (recipeEl.isJsonObject()) {
             // Inline recipe: register under a synthesized id and treat as
             // if the pack had shipped a separate recipe data file pointed to
             // by that id. InlineRecipeRegistry handles the actual injection
-            // into RecipeManager once the datapack reload completes.
+            // into RecipeManager once the datapack reload completes, wrapping
+            // it in an OriginGatedRecipe(has_power) keyed to this power.
             recipeLoc = com.cyberday1.neoorigins.service.InlineRecipeRegistry.syntheticId(id);
             com.cyberday1.neoorigins.service.InlineRecipeRegistry.register(recipeLoc, recipeEl.getAsJsonObject());
+            com.cyberday1.neoorigins.service.InlineRecipeRegistry.registerInlinePower(recipeLoc, id);
         } else {
             NeoOrigins.LOGGER.warn("[CompatB] {}: origins:recipe 'recipe' field must be string id or inline object — got {}",
                 id, recipeEl);

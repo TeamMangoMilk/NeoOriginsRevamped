@@ -1,6 +1,8 @@
 package com.cyberday1.neoorigins.screen;
 
 import com.cyberday1.neoorigins.NeoOriginsConfig;
+import com.cyberday1.neoorigins.api.origin.Impact;
+import com.cyberday1.neoorigins.api.origin.Origin;
 import com.cyberday1.neoorigins.api.origin.OriginLayer;
 import com.cyberday1.neoorigins.client.ClientOriginState;
 import com.cyberday1.neoorigins.data.LayerDataManager;
@@ -19,6 +21,19 @@ import java.util.*;
  */
 public class OriginSelectionPresenter {
 
+    /**
+     * Sort modes for the origin list. The default {@link #CLASS} preserves
+     * the existing namespace-grouped layout (origins from the same mod /
+     * pack stay together, alphabetical within each group), so the screen
+     * looks unchanged until the user explicitly cycles the dropdown.
+     */
+    public enum SortMode {
+        NAME_ASC,    // flat alphabetical, no headers
+        NAME_DESC,   // flat reverse-alphabetical, no headers
+        CLASS,       // grouped by namespace ("class" / mod), alpha within
+        IMPACT_ASC   // ascending by impact (none → low → medium → high), no headers
+    }
+
     private List<OriginLayer> pendingLayers  = List.of();
     private int currentLayerIndex            = 0;
     private ResourceLocation selectedOriginId      = null;
@@ -26,6 +41,7 @@ public class OriginSelectionPresenter {
     private String searchText                = "";
     private boolean forceReselect            = false;
     private final Map<ResourceLocation, ResourceLocation> sessionOrigins = new HashMap<>();
+    private SortMode sortMode                = SortMode.CLASS;
 
     private final List<OriginListEntry> allRows      = new ArrayList<>();
     private final List<OriginListEntry> filteredRows = new ArrayList<>();
@@ -80,6 +96,17 @@ public class OriginSelectionPresenter {
             rawIds.add(co.origin());
         }
 
+        switch (sortMode) {
+            case CLASS      -> buildRowsGroupedByNamespace(rawIds);
+            case NAME_ASC   -> buildRowsFlatByName(rawIds, false);
+            case NAME_DESC  -> buildRowsFlatByName(rawIds, true);
+            case IMPACT_ASC -> buildRowsFlatByImpact(rawIds);
+        }
+
+        applySearch();
+    }
+
+    private void buildRowsGroupedByNamespace(List<ResourceLocation> rawIds) {
         Map<String, List<ResourceLocation>> byNamespace = new LinkedHashMap<>();
         for (ResourceLocation id : rawIds)
             byNamespace.computeIfAbsent(id.getNamespace(), k -> new ArrayList<>()).add(id);
@@ -108,8 +135,41 @@ public class OriginSelectionPresenter {
                 allOriginIds.add(id);
             }
         }
+    }
 
-        applySearch();
+    private void buildRowsFlatByName(List<ResourceLocation> rawIds, boolean reverse) {
+        List<ResourceLocation> sorted = new ArrayList<>(rawIds);
+        Comparator<ResourceLocation> byName =
+            (a, b) -> getOriginDisplayName(a).compareToIgnoreCase(getOriginDisplayName(b));
+        sorted.sort(reverse ? byName.reversed() : byName);
+        for (ResourceLocation id : sorted) {
+            allRows.add(OriginListEntry.origin(id, getOriginDisplayName(id), id.getNamespace()));
+            allOriginIds.add(id);
+        }
+    }
+
+    private void buildRowsFlatByImpact(List<ResourceLocation> rawIds) {
+        List<ResourceLocation> sorted = new ArrayList<>(rawIds);
+        // Ascending: NONE (0) → LOW (1) → MEDIUM (2) → HIGH (3). Missing /
+        // unresolvable origins sort to the end so corrupt entries don't lead
+        // the list. Tie-break alphabetically for a stable, predictable order.
+        sorted.sort((a, b) -> {
+            int ia = impactRank(a);
+            int ib = impactRank(b);
+            if (ia != ib) return Integer.compare(ia, ib);
+            return getOriginDisplayName(a).compareToIgnoreCase(getOriginDisplayName(b));
+        });
+        for (ResourceLocation id : sorted) {
+            allRows.add(OriginListEntry.origin(id, getOriginDisplayName(id), id.getNamespace()));
+            allOriginIds.add(id);
+        }
+    }
+
+    private static int impactRank(ResourceLocation id) {
+        Origin o = OriginDataManager.INSTANCE.getOrigin(id);
+        if (o == null) return Integer.MAX_VALUE;
+        Impact imp = o.impact();
+        return imp == null ? Integer.MAX_VALUE : imp.ordinal();
     }
 
     public void applySearch() {
@@ -203,6 +263,9 @@ public class OriginSelectionPresenter {
     public Map<ResourceLocation, ResourceLocation> sessionOrigins() {
         return Collections.unmodifiableMap(sessionOrigins);
     }
+    public SortMode sortMode()                 { return sortMode; }
+    /** Set the active sort mode. Caller is responsible for invoking {@link #buildRows()} afterwards. */
+    public void setSortMode(SortMode mode)     { if (mode != null) sortMode = mode; }
 
     private static String getModName(String namespace) {
         return ModList.get()

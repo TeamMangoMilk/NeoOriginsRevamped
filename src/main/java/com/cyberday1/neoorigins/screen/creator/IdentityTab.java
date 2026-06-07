@@ -3,6 +3,7 @@ package com.cyberday1.neoorigins.screen.creator;
 import com.cyberday1.neoorigins.api.origin.Impact;
 import com.cyberday1.neoorigins.api.origin.OriginLayer;
 import com.cyberday1.neoorigins.data.LayerDataManager;
+import com.cyberday1.neoorigins.data.OriginDataManager;
 import com.cyberday1.neoorigins.screen.creator.model.OriginDraft;
 import com.cyberday1.neoorigins.screen.creator.widget.CycleSelector;
 import com.cyberday1.neoorigins.screen.creator.widget.ItemPickerOverlay;
@@ -31,9 +32,13 @@ public final class IdentityTab implements CreatorTab {
     private static final ResourceLocation CLASS_LAYER =
         ResourceLocation.fromNamespaceAndPath("neoorigins", "class");
 
-    private static final int LABEL_DX = 8, FIELD_DX = 100, ROW_H = 24, BOX_H = 16;
+    private static final int LABEL_DX = 8, FIELD_DX = 100, BOX_H = 16;
+    /** Field-row pitch, recomputed each {@link #init} so all rows + the Layer
+     *  block fit inside the panel instead of spilling onto the footer at high
+     *  GUI scales (tester report, 2.2). */
+    private int rowH = 24;
 
-    private final LabeledField idPath = new LabeledField("id path");
+    private final LabeledField idPath = new LabeledField("id");
     private final LabeledField name = new LabeledField("name");
     private final LabeledField description = new LabeledField("description");
     private final LabeledField icon = new LabeledField("icon");
@@ -46,7 +51,7 @@ public final class IdentityTab implements CreatorTab {
     private CycleSelector<ResourceLocation> layer;
 
     private OriginCreatorScreen parent;
-    private int rowY, layerHdrY, layerRowY;
+    private int rowY, layerRowY;
 
     @Override public Component title() { return TITLE; }
     @Override public Component help() {
@@ -66,22 +71,25 @@ public final class IdentityTab implements CreatorTab {
         }
 
         rowY = y + 14;
+        // Shrink the row pitch so the 6 fields + the Layer row always fit the
+        // available height; clamp so boxes never overlap (>= BOX_H + 2).
+        int layerBlock = 4 /*gap*/ + 20 /*selector*/ + 12 /*hint*/;
+        rowH = Math.max(BOX_H + 2, Math.min(24, (h - 14 - layerBlock) / 6));
         int fieldW = Math.min(w - FIELD_DX - 8, 240);
         Font font = parent.font();
         int fx = x + FIELD_DX;
 
         parent.register(idPath.build(font, fx, rowY, fieldW, BOX_H));
-        parent.register(name.build(font, fx, rowY + ROW_H, fieldW, BOX_H));
-        parent.register(description.build(font, fx, rowY + ROW_H * 2, fieldW, BOX_H));
-        parent.register(icon.build(font, fx, rowY + ROW_H * 3, fieldW - 44, BOX_H));
+        parent.register(name.build(font, fx, rowY + rowH, fieldW, BOX_H));
+        parent.register(description.build(font, fx, rowY + rowH * 2, fieldW, BOX_H));
+        parent.register(icon.build(font, fx, rowY + rowH * 3, fieldW - 44, BOX_H));
         parent.register(Button.builder(Component.literal("pick"), b -> openPicker())
-            .bounds(fx + fieldW - 40, rowY + ROW_H * 3 - 2, 40, BOX_H + 4).build());
-        parent.register(impact.build(fx, rowY + ROW_H * 4, 90, 20));
-        parent.register(order.build(font, fx, rowY + ROW_H * 5, 60, BOX_H));
+            .bounds(fx + fieldW - 40, rowY + rowH * 3 - 2, 40, BOX_H + 4).build());
+        parent.register(impact.build(fx, rowY + rowH * 4, 90, 20));
+        parent.register(order.build(font, fx, rowY + rowH * 5, 60, BOX_H));
 
         // ── Layer (folded in from the old Layer tab) ──────────────────────
-        layerHdrY = rowY + ROW_H * 6 + 4;
-        layerRowY = layerHdrY + 16;
+        layerRowY = rowY + rowH * 6 + 4;
         layerNames.clear();
         List<OriginLayer> layers = LayerDataManager.INSTANCE.getSortedLayers();
         for (OriginLayer l : layers) layerNames.put(l.id(), l.name().getString());
@@ -108,7 +116,11 @@ public final class IdentityTab implements CreatorTab {
     public void pullFromDraft() {
         if (itemPicker.isOpen()) return;
         OriginDraft d = parent.draft();
-        idPath.setValue(d.idPath);
+        // Show the full ResourceLocation (ns:path) so a templated vanilla
+        // origin reads as e.g. "neoorigins:abyssal", making the override
+        // intent visible. The default custom namespace renders as bare path
+        // ("my_origin") so first-time users aren't confronted with the prefix.
+        idPath.setValue(formatIdField(d));
         name.setValue(d.name);
         description.setValue(d.description);
         icon.setValue(d.icon.toString());
@@ -121,7 +133,7 @@ public final class IdentityTab implements CreatorTab {
     public void pushToDraft() {
         if (itemPicker.isOpen()) return;
         OriginDraft d = parent.draft();
-        d.idPath = idPath.value().trim();
+        parseIdField(idPath.value().trim(), d);
         d.name = name.value();
         d.description = description.value();
         d.impact = impact.value();
@@ -145,25 +157,38 @@ public final class IdentityTab implements CreatorTab {
         int lx = x + LABEL_DX;
         CreatorStyle.sectionHeader(g, font, "Origin basics", lx, y, w - LABEL_DX * 2);
         idPath.drawLabel(g, font, lx, rowY + 4);
-        name.drawLabel(g, font, lx, rowY + ROW_H + 4);
-        description.drawLabel(g, font, lx, rowY + ROW_H * 2 + 4);
-        icon.drawLabel(g, font, lx, rowY + ROW_H * 3 + 4);
-        g.drawString(font, "Impact", lx, rowY + ROW_H * 4 + 6, CreatorStyle.LABEL, false);
-        order.drawLabel(g, font, lx, rowY + ROW_H * 5 + 4);
 
-        CreatorStyle.sectionHeader(g, font, "Layer", lx, layerHdrY, w - LABEL_DX * 2);
+        // Override indicator near the id field. Renders here so it travels
+        // with a templated draft; the matching "?" tooltip is queued at the
+        // bottom of this method (after the row-hover loop) so it wins.
+        OriginDraft d = parent.draft();
+        boolean overrides = "neoorigins".equals(d.namespace)
+            && OriginDataManager.INSTANCE.getOrigin(
+                ResourceLocation.fromNamespaceAndPath("neoorigins", d.idPath)) != null;
+        int markX = x + w - LABEL_DX - 10;
+        int markY = rowY + 4;
+        g.drawString(font, overrides ? "[!] ?" : "?", markX, markY,
+            overrides ? CreatorStyle.ACCENT : CreatorStyle.TEXT_DIM, false);
+        name.drawLabel(g, font, lx, rowY + rowH + 4);
+        description.drawLabel(g, font, lx, rowY + rowH * 2 + 4);
+        icon.drawLabel(g, font, lx, rowY + rowH * 3 + 4);
+        g.drawString(font, "Impact", lx, rowY + rowH * 4 + 6, CreatorStyle.LABEL, false);
+        order.drawLabel(g, font, lx, rowY + rowH * 5 + 4);
+
+        // Layer row — one left label (no separate section header, which used to
+        // print a second "Layer" and pushed the selector onto the footer).
         g.drawString(font, "Layer", lx, layerRowY + 6, CreatorStyle.LABEL, false);
         boolean isClass = layer != null && CLASS_LAYER.equals(layer.value());
         g.drawString(font,
             isClass ? "This origin will be a CLASS (neoorigins:class layer)."
                     : "Appears as a normal origin in the chosen picker.",
-            lx, layerRowY + 26, isClass ? CreatorStyle.ACCENT : CreatorStyle.TEXT_DIM, false);
+            lx, layerRowY + 22, isClass ? CreatorStyle.ACCENT : CreatorStyle.TEXT_DIM, false);
 
         // Hover help for every Identity field.
         String tip = null;
         for (int i = 0; i < TIPS.length; i++) {
-            int top = rowY + ROW_H * i;
-            if (mouseY >= top && mouseY < top + ROW_H && mouseX >= lx && mouseX <= x + w) {
+            int top = rowY + rowH * i;
+            if (mouseY >= top && mouseY < top + rowH && mouseX >= lx && mouseX <= x + w) {
                 tip = TIPS[i];
                 break;
             }
@@ -175,16 +200,59 @@ public final class IdentityTab implements CreatorTab {
         if (tip != null) {
             parent.queueTooltip(java.util.List.of(tip), mouseX, mouseY);
         }
+
+        // "?" marker hover — queued LAST so it wins over the id-row tip
+        // (the marker sits inside the id row and would otherwise be hidden
+        // by TIPS[0]).
+        if (mouseX >= markX - 2 && mouseX <= markX + 18
+                && mouseY >= markY - 2 && mouseY <= markY + 10) {
+            String msg = overrides
+                ? "OVERRIDES vanilla neoorigins:" + d.idPath
+                    + ". Save will write data/neoorigins/origins/origins/"
+                    + d.idPath + ".json — the shipped origin is replaced wholesale."
+                    + " Change the namespace (e.g. drop \"neoorigins:\") to keep both."
+                : "Bare ids land under neoorigins_custom:. Prefix with"
+                    + " \"namespace:\" to write elsewhere; use \"neoorigins:<id>\""
+                    + " to override a vanilla origin in place.";
+            parent.queueTooltip(java.util.List.of(msg), mouseX, mouseY);
+        }
     }
 
     private static final String[] TIPS = {
-        "Datapack id (lowercase a-z/0-9/_). Becomes neoorigins_custom:<id>.",
+        "Datapack id. Bare path (e.g. \"my_origin\") lives under neoorigins_custom:."
+            + " Use \"namespace:path\" to write under a different namespace —"
+            + " set it to neoorigins:<vanilla_id> to OVERRIDE the shipped origin.",
         "Display name shown in the origin picker.",
         "Flavor text shown under the name in the picker.",
         "Item used as this origin's icon. Click Pick to browse all items.",
         "Origins impact rating (NONE..HIGH) — the dots in the picker.",
         "Sort order in the picker; lower numbers appear first."
     };
+
+    /** Render the draft's namespace:idPath back into the editable id field;
+     *  hides the default custom namespace prefix to keep the new-draft UX
+     *  clean while still surfacing a templated vanilla id ("neoorigins:abyssal"). */
+    private static String formatIdField(OriginDraft d) {
+        String ns = d.namespace == null || d.namespace.isBlank()
+            ? OriginDraft.CUSTOM_NAMESPACE : d.namespace;
+        return OriginDraft.CUSTOM_NAMESPACE.equals(ns) ? d.idPath : ns + ":" + d.idPath;
+    }
+
+    /** Inverse of {@link #formatIdField}: split a typed value on the FIRST
+     *  colon to namespace + idPath. Bare input (no colon) resets namespace to
+     *  the default so the user can always type a normal id without thinking
+     *  about prefixes. Invalid characters are caught by CreatorValidator on
+     *  Save — we just store the trimmed string here. */
+    private static void parseIdField(String raw, OriginDraft d) {
+        int colon = raw.indexOf(':');
+        if (colon < 0) {
+            d.namespace = OriginDraft.CUSTOM_NAMESPACE;
+            d.idPath = raw;
+        } else {
+            d.namespace = raw.substring(0, colon).trim();
+            d.idPath = raw.substring(colon + 1).trim();
+        }
+    }
 
     @Override
     public boolean mouseScrolled(double mx, double my, double sx, double sy) {

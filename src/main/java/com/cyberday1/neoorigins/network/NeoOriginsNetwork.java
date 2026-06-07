@@ -7,6 +7,7 @@ import com.cyberday1.neoorigins.api.power.PowerHolder;
 import com.cyberday1.neoorigins.attachment.OriginAttachments;
 import com.cyberday1.neoorigins.attachment.PlayerOriginData;
 import com.cyberday1.neoorigins.data.LayerDataManager;
+import com.cyberday1.neoorigins.data.OriginClaimsData;
 import com.cyberday1.neoorigins.data.OriginDataManager;
 import com.cyberday1.neoorigins.service.ActiveOriginService;
 import com.cyberday1.neoorigins.network.payload.ActivateClassPowerPayload;
@@ -17,14 +18,20 @@ import com.cyberday1.neoorigins.network.payload.EditorTogglePowerPayload;
 import com.cyberday1.neoorigins.network.payload.OpenEditorScreenPayload;
 import com.cyberday1.neoorigins.network.payload.OpenOriginScreenPayload;
 import com.cyberday1.neoorigins.network.payload.SyncActivePowersPayload;
+import com.cyberday1.neoorigins.network.payload.SyncActiveThemePayload;
 import com.cyberday1.neoorigins.network.payload.SyncCooldownPayload;
 import com.cyberday1.neoorigins.network.payload.SyncEvolutionConfigPayload;
+import com.cyberday1.neoorigins.network.payload.SyncEvolutionProgressPayload;
 import com.cyberday1.neoorigins.network.payload.SyncMoisturePayload;
 import com.cyberday1.neoorigins.network.payload.SyncResourcePayload;
 import com.cyberday1.neoorigins.network.payload.SyncOriginRegistryPayload;
 import com.cyberday1.neoorigins.network.payload.SyncMobOriginPayload;
 import com.cyberday1.neoorigins.network.payload.SyncOriginsPayload;
+import com.cyberday1.neoorigins.network.payload.ActivatePowerByKeyPayload;
+import com.cyberday1.neoorigins.network.payload.SyncKeybindRegistryPayload;
+import com.cyberday1.neoorigins.network.payload.SyncOriginClaimsPayload;
 import com.cyberday1.neoorigins.network.payload.SyncPlayerVisualPayload;
+import com.cyberday1.neoorigins.power.keybind.PowerKeybindRegistry;
 import com.cyberday1.neoorigins.api.origin.Origin;
 import com.cyberday1.neoorigins.data.PowerDataManager;
 import com.cyberday1.neoorigins.NeoOriginsConfig;
@@ -122,6 +129,12 @@ public class NeoOriginsNetwork {
         );
 
         registrar.playToClient(
+            SyncEvolutionProgressPayload.TYPE,
+            SyncEvolutionProgressPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleSyncEvolutionProgress
+        );
+
+        registrar.playToClient(
             SyncActivePowersPayload.TYPE,
             SyncActivePowersPayload.STREAM_CODEC,
             NeoOriginsNetwork::handleSyncActivePowers
@@ -131,6 +144,30 @@ public class NeoOriginsNetwork {
             SyncPlayerVisualPayload.TYPE,
             SyncPlayerVisualPayload.STREAM_CODEC,
             NeoOriginsNetwork::handleSyncPlayerVisual
+        );
+
+        registrar.playToClient(
+            SyncKeybindRegistryPayload.TYPE,
+            SyncKeybindRegistryPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleSyncKeybindRegistry
+        );
+
+        registrar.playToClient(
+            SyncActiveThemePayload.TYPE,
+            SyncActiveThemePayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleSyncActiveTheme
+        );
+
+        registrar.playToClient(
+            SyncOriginClaimsPayload.TYPE,
+            SyncOriginClaimsPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleSyncOriginClaims
+        );
+
+        registrar.playToServer(
+            ActivatePowerByKeyPayload.TYPE,
+            ActivatePowerByKeyPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleActivatePowerByKey
         );
 
         registrar.playToClient(
@@ -149,6 +186,12 @@ public class NeoOriginsNetwork {
             com.cyberday1.neoorigins.network.payload.CreatorResultPayload.TYPE,
             com.cyberday1.neoorigins.network.payload.CreatorResultPayload.STREAM_CODEC,
             NeoOriginsNetwork::handleCreatorResult
+        );
+
+        registrar.playToClient(
+            com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload.TYPE,
+            com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload.STREAM_CODEC,
+            NeoOriginsNetwork::handleOriginTemplates
         );
 
         registrar.playToServer(
@@ -294,6 +337,11 @@ public class NeoOriginsNetwork {
             com.cyberday1.neoorigins.client.ClientMoistureState.clear();
             com.cyberday1.neoorigins.client.ClientResourceState.clear();
             com.cyberday1.neoorigins.client.ClientCooldownState.clear();
+            // Clear stale hotkey assignments — the incoming SyncKeybindRegistryPayload
+            // (sent immediately after this on login / reload) will repopulate them.
+            // Without this, a relog into a server with fewer declared keys would
+            // leave high-index pool slots still firing the previous server's powers.
+            com.cyberday1.neoorigins.client.HotkeyAssignments.clear();
         });
     }
 
@@ -315,6 +363,12 @@ public class NeoOriginsNetwork {
         );
     }
 
+    private static void handleSyncOriginClaims(SyncOriginClaimsPayload payload, IPayloadContext ctx) {
+        ctx.enqueueWork(() ->
+            com.cyberday1.neoorigins.client.ClientOriginClaims.set(payload.claims())
+        );
+    }
+
     private static void handleSyncResource(SyncResourcePayload payload, IPayloadContext ctx) {
         ctx.enqueueWork(() ->
             com.cyberday1.neoorigins.client.ClientResourceState.apply(payload.resources())
@@ -328,6 +382,24 @@ public class NeoOriginsNetwork {
                 payload.tier3Kills(), payload.messageInterval(),
                 payload.currentKills(), payload.currentTier())
         );
+    }
+
+    private static void handleSyncEvolutionProgress(SyncEvolutionProgressPayload payload, IPayloadContext ctx) {
+        ctx.enqueueWork(() ->
+            com.cyberday1.neoorigins.client.ClientEvolutionConfig.updateProgress(
+                payload.kills(), payload.tier())
+        );
+    }
+
+    /**
+     * Lightweight live-progress packet sent on every kill. Carries only the
+     * mutable (kills, tier) pair -- the static config travels via
+     * {@link #syncEvolutionToPlayer(ServerPlayer)} on login and reload.
+     */
+    public static void syncEvolutionProgressToPlayer(ServerPlayer sp) {
+        PlayerOriginData data = sp.getData(OriginAttachments.originData());
+        PacketDistributor.sendToPlayer(sp,
+            new SyncEvolutionProgressPayload(data.getEssenceKills(), data.getEvolutionTier()));
     }
 
     /**
@@ -384,6 +456,15 @@ public class NeoOriginsNetwork {
         );
     }
 
+    private static void handleOriginTemplates(
+            com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload payload, IPayloadContext ctx) {
+        // Same dedicated-server dist-cleaner guard as handleOpenEditorScreen.
+        if (net.neoforged.fml.loading.FMLEnvironment.dist != net.neoforged.api.distmarker.Dist.CLIENT) return;
+        ctx.enqueueWork(() ->
+            com.cyberday1.neoorigins.client.ClientTemplateCache.setFromJson(payload.json())
+        );
+    }
+
     /**
      * Shared open path for the 2.1 creator (command + keybind). Gate-checked by
      * the caller; syncs registry/state then asks the client to open the screen
@@ -393,6 +474,13 @@ public class NeoOriginsNetwork {
     public static void openCreatorFor(ServerPlayer sp) {
         syncRegistryToPlayer(sp);
         syncToPlayer(sp);
+        // Ship the template bundle BEFORE OpenEditorScreenPayload so the
+        // picker's first render has data — payloads inside a single tick are
+        // ordered, so the client receives them in this order.
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(sp,
+            new com.cyberday1.neoorigins.network.payload.OriginTemplatesPayload(
+                com.cyberday1.neoorigins.service.OriginTemplates.toJson(
+                    com.cyberday1.neoorigins.service.OriginTemplates.collect())));
         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(sp, new OpenEditorScreenPayload());
     }
 
@@ -666,6 +754,21 @@ public class NeoOriginsNetwork {
                 return;
             }
 
+            // Unique-origin enforcement. For layers configured as unique
+            // (unique_origin_layers), an origin already claimed by another
+            // player cannot be taken. An operator in creative mode bypasses
+            // the lock (the admin override path). Checked BEFORE any orb is
+            // consumed below so a rejected pick never wastes the player's orb.
+            boolean uniqueLayer = NeoOriginsConfig.isUniqueLayer(layerId);
+            boolean uniqueBypass = sp.hasPermissions(2) && sp.isCreative();
+            if (uniqueLayer && !uniqueBypass
+                    && OriginClaimsData.get(sp.getServer()).isClaimedByOther(layerId, originId, sp.getUUID())) {
+                sp.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                        "That origin has already been claimed by another player on this server.")
+                    .withStyle(net.minecraft.ChatFormatting.RED));
+                return;
+            }
+
             PlayerOriginData data = sp.getData(OriginAttachments.originData());
 
             // First commit after an orb-of-origin use: perform the deferred
@@ -675,7 +778,16 @@ public class NeoOriginsNetwork {
             // anything is a free cancel — the player keeps their orb and
             // origins.
             if (data.isPendingOrbCommit()) {
+                // An orb re-pick clears every layer, so it also releases all of
+                // this player's unique-origin claims. Capture them before the
+                // commit wipes the player's origin map.
+                java.util.Map<ResourceLocation, ResourceLocation> preOrbOrigins =
+                    new java.util.HashMap<>(data.getOrigins());
                 commitOrbUse(sp, data);
+                OriginClaimsData claimsData = OriginClaimsData.get(sp.getServer());
+                preOrbOrigins.forEach((l, o) -> {
+                    if (NeoOriginsConfig.isUniqueLayer(l)) claimsData.releaseIfOwner(l, o, sp.getUUID());
+                });
             }
 
             // Any pick re-engages the player — a previous picker-abandon no
@@ -714,6 +826,9 @@ public class NeoOriginsNetwork {
             if (NeoForge.EVENT_BUS.post(event).isCanceled()) return;
 
             data.setOrigin(layerId, event.getNewOrigin());
+            if (uniqueLayer) {
+                OriginClaimsData.get(sp.getServer()).claim(layerId, event.getNewOrigin(), sp.getUUID());
+            }
             ActiveOriginService.applyOriginPowers(sp, layerId, oldOrigin, event.getNewOrigin());
             com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
                 sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.CHOSEN, event.getNewOrigin());
@@ -907,6 +1022,7 @@ public class NeoOriginsNetwork {
         String prefix = playerUuid + ":";
         LAST_ACTIVATE_TICK.keySet().removeIf(key -> key.startsWith(prefix));
         LAST_CREATOR_ACTION.keySet().removeIf(key -> key.startsWith(prefix));
+        LAST_KEY_PRESS_TICK.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     /**
@@ -1021,7 +1137,110 @@ public class NeoOriginsNetwork {
 
     /** Open the origin selection screen, optionally forcing re-selection of filled layers. */
     public static void openSelectionScreen(ServerPlayer player, boolean isOrb, boolean forceReselect) {
+        syncClaimsToPlayer(player);
         PacketDistributor.sendToPlayer(player, new OpenOriginScreenPayload(isOrb, forceReselect));
+    }
+
+    /**
+     * Send the set of origins locked for {@code player} (claimed by someone else in a
+     * unique-enforced layer) so the picker can grey them out. The player's own claims are
+     * excluded so they can re-pick their current origin; an OP in creative bypasses the lock
+     * entirely and receives an empty map.
+     */
+    public static void syncClaimsToPlayer(ServerPlayer player) {
+        Map<ResourceLocation, Map<ResourceLocation, String>> locked = new java.util.HashMap<>();
+        boolean bypass = player.hasPermissions(2) && player.isCreative();
+        if (!bypass) {
+            OriginClaimsData claimsData = OriginClaimsData.get(player.getServer());
+            claimsData.view().forEach((layer, byOrigin) -> {
+                if (!NeoOriginsConfig.isUniqueLayer(layer)) return;
+                byOrigin.forEach((origin, owner) -> {
+                    if (owner.equals(player.getUUID())) return;
+                    locked.computeIfAbsent(layer, k -> new java.util.HashMap<>())
+                          .put(origin, ownerName(player.getServer(), owner));
+                });
+            });
+        }
+        PacketDistributor.sendToPlayer(player, new SyncOriginClaimsPayload(locked));
+    }
+
+    private static String ownerName(net.minecraft.server.MinecraftServer server, java.util.UUID id) {
+        ServerPlayer online = server.getPlayerList().getPlayer(id);
+        if (online != null) return online.getGameProfile().getName();
+        return server.getProfileCache() != null
+            ? server.getProfileCache().get(id).map(com.mojang.authlib.GameProfile::getName).orElse(id.toString())
+            : id.toString();
+    }
+
+    private static void handleSyncKeybindRegistry(SyncKeybindRegistryPayload payload, IPayloadContext ctx) {
+        // Dist-safety: registered playToClient, but routing weirdness shouldn't
+        // classload Minecraft on a dedicated-server JVM.
+        if (net.neoforged.fml.loading.FMLEnvironment.dist != net.neoforged.api.distmarker.Dist.CLIENT) return;
+        ctx.enqueueWork(() ->
+            com.cyberday1.neoorigins.client.HotkeyAssignments.set(
+                payload.declaredKeys(), payload.continuousFlags(), payload.powerToKey())
+        );
+    }
+
+    /** Per-(uuid:key) edge tracker — debounces continuous payload bursts so
+     *  edge-detection powers don't fire every tick when the client also sends
+     *  "still held" samples. Cleared on logout via {@link #clearDebounce}. */
+    private static final Map<String, Long> LAST_KEY_PRESS_TICK = new ConcurrentHashMap<>();
+    /** Minimum game-ticks between two non-continuous fires of the same translation key. */
+    private static final int KEY_PRESS_DEBOUNCE_TICKS = 5;
+
+    private static void handleActivatePowerByKey(ActivatePowerByKeyPayload payload, IPayloadContext ctx) {
+        ctx.enqueueWork(() -> {
+            if (!(ctx.player() instanceof ServerPlayer sp)) return;
+            String key = payload.translationKey();
+            if (key == null || key.isEmpty()) return;
+            if (!PowerKeybindRegistry.isDeclared(key)) {
+                // A client that's out of sync (e.g. just before SyncKeybindRegistryPayload
+                // lands after a /reload) can send a key we've already cleared. Drop silently.
+                return;
+            }
+
+            // Continuous samples skip the debounce — they're supposed to arrive
+            // every tick. Non-continuous (edge) presses use the debounce to
+            // collapse double-clicks from key-bounce / packet duplication.
+            if (!payload.held() || !PowerKeybindRegistry.isContinuous(key)) {
+                long now = sp.level().getGameTime();
+                String dKey = sp.getUUID() + ":" + key;
+                Long last = LAST_KEY_PRESS_TICK.get(dKey);
+                if (last != null && (now - last) < KEY_PRESS_DEBOUNCE_TICKS) return;
+                LAST_KEY_PRESS_TICK.put(dKey, now);
+            }
+
+            PowerKeybindRegistry.dispatch(sp, key, payload.held());
+        });
+    }
+
+    private static void handleSyncActiveTheme(SyncActiveThemePayload payload, IPayloadContext ctx) {
+        if (net.neoforged.fml.loading.FMLEnvironment.dist != net.neoforged.api.distmarker.Dist.CLIENT) return;
+        ctx.enqueueWork(() -> {
+            String raw = payload.themeId();
+            ResourceLocation id = (raw == null || raw.isEmpty()) ? null : ResourceLocation.tryParse(raw);
+            com.cyberday1.neoorigins.client.theme.ActiveThemeRegistry.setServerDeclared(id);
+        });
+    }
+
+    /**
+     * Push the datapack-declared active UI theme to one player. {@code themeId}
+     * may be {@code null} to clear (server's stack has no declaration).
+     */
+    public static void syncActiveThemeToPlayer(ServerPlayer player) {
+        ResourceLocation id = com.cyberday1.neoorigins.data.ActiveThemeManager.INSTANCE.getSelected();
+        PacketDistributor.sendToPlayer(player,
+            new SyncActiveThemePayload(id == null ? "" : id.toString()));
+    }
+
+    /** Send the named-keybind registry snapshot to one player. */
+    public static void syncKeybindRegistryToPlayer(ServerPlayer player) {
+        List<String> keys = PowerKeybindRegistry.declaredKeys();
+        List<Boolean> flags = new java.util.ArrayList<>(keys.size());
+        for (String k : keys) flags.add(PowerKeybindRegistry.isContinuous(k));
+        PacketDistributor.sendToPlayer(player,
+            new SyncKeybindRegistryPayload(keys, flags, PowerKeybindRegistry.powerToKey()));
     }
 
     /** Sync the full origin/layer/power registry to a player so their client can render the GUI. */
@@ -1078,6 +1297,9 @@ public class NeoOriginsNetwork {
         data.incrementOrbUseCount();
         data.resetEvolution();
         data.setPendingOrbCommit(false);
+        // revokeAllPowers cleared the global-power ledger; re-grant matching
+        // global power sets so an orb reset preserves apoli:global powers.
+        com.cyberday1.neoorigins.service.GlobalPowerService.reconcilePlayer(sp);
     }
 
     private static void shrinkOrbFromInventory(ServerPlayer sp) {

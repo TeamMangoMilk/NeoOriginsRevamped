@@ -108,7 +108,7 @@ True while horizontal delta-movement is nonzero. No fields.
 
 ## `neoorigins:in_rain`
 
-True when rain is falling at the entity's block position (server-side only).
+True when rain is falling at the entity's block position with sky access (server-side only); returns false while mounted. If **Vampires Need Umbrellas** is installed, holding an umbrella in either hand or a Curios/Accessories slot blocks the rain entirely (mirroring `exposed_to_sun`), so rain/water-damage origins like Wet Fur and True Hydrophobia stop hurting while you carry one.
 
 ## `neoorigins:daytime`
 
@@ -120,7 +120,7 @@ True when the sky is visible from the entity's block position (server-side only)
 
 ## `neoorigins:exposed_to_sun`
 
-True during daytime (time 0–11999) with sky access and no rain. Includes helmet protection (damageable helmets absorb the burn at the cost of durability). If **Vampires Need Umbrellas** is installed, holding an umbrella in either hand or a Curios slot blocks sun damage entirely (checked before helmets).
+True during daytime (time 0–11999) with sky access and no rain. Includes helmet protection (damageable helmets absorb the burn at the cost of durability). If **Vampires Need Umbrellas** is installed, holding an umbrella in either hand or a Curios/Accessories slot blocks sun damage entirely (checked before helmets).
 
 ## `neoorigins:on_fire` (alias `neoorigins:fire`)
 
@@ -375,7 +375,8 @@ Inspects an item in a given equipment slot.
 
 | Field | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `equipment_slot` | string | no | `"mainhand"` | `"head"`, `"chest"`, `"legs"`, `"feet"`, `"offhand"`, or `"mainhand"` |
+| `equipment_slot` | string | no | `"mainhand"` | `"head"`, `"chest"`, `"legs"`, `"feet"`, `"offhand"`, `"mainhand"`, or `"accessory"` |
+| `slot_type` | string | no | — | Only used when `equipment_slot` is `"accessory"`: narrows to a named accessory/curio slot type (e.g. `ring`, `belt`, `hands`); absent → any accessory slot |
 | `item_condition` | object | no | — | Nested condition (see below) |
 
 **Unusual:** `item_condition` has its own internal shape. Accepts any of:
@@ -385,6 +386,8 @@ Inspects an item in a given equipment slot.
 - `{ "ingredient": { "item": "..." } }` or `{ "ingredient": { "tag": "..." } }` — ingredient-style wrapper
 
 Always-true when `item_condition` is absent.
+
+**Accessory slots:** `"accessory"` inspects worn trinkets from Curios and/or Accessories (Wisp Forest), aggregating both. Each is a soft dependency — with neither installed the `accessory` slot matches nothing. When `item_condition` is present it passes if *any* equipped accessory stack matches; absent, it is a presence check (any accessory equipped). This integration is **1.21.1 only** — Accessories has no 26.1 build.
 
 ## `neoorigins:enchantment`
 
@@ -405,6 +408,8 @@ Numeric comparison against a named resource power's stored value.
 | `resource` | resource location | yes | — | Power ID storing the resource |
 | `comparison` | string | no | `">="` | Comparison operator |
 | `compare_to` | int | no | `0` | Threshold |
+
+> ⚠️ `resource` must be the **full** namespaced power ID (e.g. `mypack:thorns/resource`). Unlike `power_active`, the `*:` / `*:*` self-reference wildcard is **not** resolved here — a reference containing `*` silently reads as `0` (and is warned about at load). The same applies to the `change_resource` / `set_resource` actions.
 
 ## `neoorigins:power_active`
 

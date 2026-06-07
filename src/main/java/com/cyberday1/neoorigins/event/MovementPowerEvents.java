@@ -33,14 +33,23 @@ public class MovementPowerEvents {
         }
         com.cyberday1.neoorigins.service.EventPowerIndex.dispatch(
             sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.LAND, event.getDistance());
+        // MOD_FALL_DAMAGE scales the fall-damage multiplier. Chains on the
+        // event's current multiplier so it stacks with feather-falling etc.
+        float fallMult = com.cyberday1.neoorigins.service.EventPowerIndex.dispatchModifier(
+            sp, com.cyberday1.neoorigins.service.EventPowerIndex.Event.MOD_FALL_DAMAGE,
+            event, event.getDamageMultiplier());
+        if (fallMult != event.getDamageMultiplier()) {
+            if (!Float.isFinite(fallMult)) fallMult = 0f;
+            event.setDamageMultiplier(Math.max(0f, fallMult));
+        }
     }
 
-    // BreakSpeedModifierPower and UnderwaterMiningSpeedPower used to be handled
-    // here via PlayerEvent.BreakSpeed, but that event fires client-side for the
-    // local player and the ServerPlayer guard silently filtered every call →
-    // mining speed never applied. Both now use vanilla attributes
-    // (player.block_break_speed and player.submerged_mining_speed respectively),
-    // which auto-sync to the client.
+    // UnderwaterMiningSpeedPower uses the vanilla player.submerged_mining_speed
+    // attribute (auto-syncs to the client). BreakSpeedModifierPower used to share
+    // that attribute approach, but the attribute is global and cannot honour its
+    // block_tag filter, so it moved to PlayerEvent.BreakSpeed in
+    // BreakSpeedModifierEvents — handled on BOTH sides (the earlier ServerPlayer
+    // guard that ate the client-side call is exactly what that handler avoids).
 
     @SubscribeEvent
     public static void onEntityJoinLevel(EntityJoinLevelEvent event) {

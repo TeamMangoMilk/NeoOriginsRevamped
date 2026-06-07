@@ -94,10 +94,36 @@ public final class OriginsPowerTranslator {
         "origins:conditioned_restrict_armor", "apace:conditioned_restrict_armor",
         "origins:freeze",                "apace:freeze",
         "origins:modify_harvest",        "apace:modify_harvest",
-        // Display-only, no gameplay effect
-        "origins:tooltip",               "apace:tooltip",
-        "origins:simple",                "apace:simple",
+        // Display-only, no gameplay effect.
+        // NOTE: origins:simple / origins:tooltip are NOT skipped — they are
+        // translated to neoorigins:simple in doTranslate() so their name/
+        // description still render in the GUI (a SKIP here would discard them).
         "origins:cooldown",              "apace:cooldown"
+    );
+
+    /**
+     * Cross-mod (apace-fork) power type ids that the editor schema's authorable
+     * {@code type} enum should recognise as valid, even though they are NOT native
+     * NeoOrigins types.
+     *
+     * <p>These are import-only ids: on load they are rewritten to a first-class
+     * {@code neoorigins:} type by {@link #doTranslate} (the {@code apace:*} cases
+     * in that switch are their <i>actual</i> runtime mapping). They appear in real
+     * imported Apace/Origins packs, so the schema lists them so such files validate
+     * in the editor rather than tripping the permissive fallback branch.
+     *
+     * <p>This is the canonical source of truth for these ids — the dev-time schema
+     * generator ({@code PowerSchemaGenerator}) reads it instead of hard-coding the
+     * list, so the compat layer (not the generator) owns the cross-mod surface.
+     * Each id here MUST have a matching {@code apace:*} case in {@link #doTranslate};
+     * the set is intentionally curated (the apace prefixes seen in the wild whose
+     * targets are authorable {@code neoorigins:} types), not the full translator
+     * source surface.
+     */
+    public static final Set<String> SCHEMA_RECOGNIZED_IMPORT_IDS = Set.of(
+        "apace:night_vision",    // -> neoorigins:night_vision     (doTranslate)
+        "apace:status_effect",   // -> neoorigins:status_effect    (doTranslate)
+        "apace:water_breathing"  // -> neoorigins:water_breathing  (doTranslate)
     );
 
     /**
@@ -137,7 +163,7 @@ public final class OriginsPowerTranslator {
         Map.entry("origins:like_water",         () -> simpleType("neoorigins:ignore_water")),
         Map.entry("origins:aquatic",            () -> simpleType("neoorigins:dries_out")),
         Map.entry("origins:water_vision",       () -> simpleType("neoorigins:lava_vision")),
-        Map.entry("origins:aqua_affinity",      () -> simpleType("neoorigins:underwater_mining")),
+        Map.entry("origins:aqua_affinity",      () -> simpleType("neoorigins:underwater_mining_speed")),
         Map.entry("origins:conduit_power_on_land", () -> simpleType("neoorigins:conduit_power")),
         Map.entry("origins:air_from_potions",   () -> simpleType("neoorigins:water_breathing"))
     );
@@ -185,6 +211,7 @@ public final class OriginsPowerTranslator {
             JsonObject out = override.get();
             if (json.has("name") && !out.has("name"))               out.add("name", json.get("name"));
             if (json.has("description") && !out.has("description")) out.add("description", json.get("description"));
+            if (json.has("hidden") && !out.has("hidden"))           out.add("hidden", json.get("hidden"));
             String mappedType = out.has("type") ? out.get("type").getAsString() : "?";
             CompatTranslationLog.pass(id, type + " -> " + mappedType + " (simple override)");
             return Optional.of(out);
@@ -199,9 +226,10 @@ public final class OriginsPowerTranslator {
             Optional<JsonObject> result = doTranslate(id, type, json);
             if (result.isPresent()) {
                 JsonObject out = result.get();
-                // Preserve display name and description from the original Origins JSON.
+                // Preserve display name, description and the hidden flag from the original Origins JSON.
                 if (json.has("name") && !out.has("name"))               out.add("name", json.get("name"));
                 if (json.has("description") && !out.has("description")) out.add("description", json.get("description"));
+                if (json.has("hidden") && !out.has("hidden"))           out.add("hidden", json.get("hidden"));
                 String mappedType = out.has("type") ? out.get("type").getAsString() : "?";
                 CompatTranslationLog.pass(id, type + " -> " + mappedType);
             }
@@ -217,6 +245,7 @@ public final class OriginsPowerTranslator {
     private static Optional<JsonObject> doTranslate(ResourceLocation id, String type, JsonObject src) {
         return switch (type) {
             case "origins:attribute",              "apace:attribute"              -> translateAttribute(src);
+            case "origins:modify_attribute",       "apace:modify_attribute"       -> translateModifyAttribute(src);
             case "origins:elytra_flight",          "apace:elytra_flight"          -> translateSimple("neoorigins:natural_glide");
             case "origins:creative_flight",        "apace:creative_flight"        -> translateSimple("neoorigins:flight");
             case "origins:night_vision",           "apace:night_vision"           -> translateSimple("neoorigins:night_vision");
@@ -259,6 +288,12 @@ public final class OriginsPowerTranslator {
             case "origins:action_on_block_break",  "apace:action_on_block_break"  -> translateActionOnBlockBreak(src);
             case "origins:action_on_entity_use",   "apace:action_on_entity_use"   -> translateActionOnEntityUse(src);
             case "origins:status_bar_texture",      "apace:status_bar_texture"     -> translateDisplayNoop();
+            // Display-only powers with no gameplay effect — map to the native
+            // neoorigins:simple marker so the name/description still show in the
+            // GUI. (Known origins:simple id-overrides are handled earlier in
+            // translate() before reaching here.)
+            case "origins:simple",                  "apace:simple",
+                 "origins:tooltip",                 "apace:tooltip"                -> translateSimple("neoorigins:simple");
             case "origins:prevent_elytra_flight",   "apace:prevent_elytra_flight"  -> translateSimplePrevent("ELYTRA");
             case "origins:modify_projectile_damage","apace:modify_projectile_damage"-> translateModifyProjectileDamage(src);
             case "origins:modify_air_speed",        "apace:modify_air_speed"        -> translateModifyAirSpeed(src);
@@ -636,6 +671,66 @@ public final class OriginsPowerTranslator {
         return Optional.of(out);
     }
 
+    /**
+     * Translates {@code origins:modify_attribute} to {@code neoorigins:attribute_modifier}.
+     *
+     * <p>Distinct schema from {@code origins:attribute}: the target {@code attribute} sits at
+     * the <i>top level</i> with a sibling {@code modifier} (or {@code modifiers} array) that
+     * carries only {@code operation}/{@code value}. {@code origins:attribute}, by contrast,
+     * nests the attribute id <i>inside</i> each modifier — so the two cannot share a handler
+     * (routing this shape through {@link #translateAttribute} would throw "missing attribute").
+     *
+     * <p>Attribute ids pass through verbatim; {@code AttributeModifierPower} resolves the
+     * {@code generic.}/{@code player.} prefix variance across 1.21.1 (prefixed) and 26.1
+     * (unprefixed) at runtime, so legacy {@code minecraft:generic.max_health} names work as-is.
+     *
+     * <p>Route A limitation: when the modifier carries a {@code resource} key the value is
+     * driven by a runtime resource (e.g. health that tracks a counter). A static
+     * attribute_modifier cannot reproduce that — it applies the declared base {@code value}
+     * only. Such powers load (so their origin is no longer hidden) but the dynamic behaviour
+     * is not replicated; a faithful port would need a resource-aware native attribute power.
+     */
+    private static Optional<JsonObject> translateModifyAttribute(JsonObject src) {
+        JsonObject out = new JsonObject();
+        out.addProperty("type", "neoorigins:attribute_modifier");
+
+        JsonObject mod = null;
+        if (src.has("modifier") && src.get("modifier").isJsonObject()) {
+            mod = src.getAsJsonObject("modifier");
+        } else if (src.has("modifiers") && src.get("modifiers").isJsonArray()
+                   && !src.getAsJsonArray("modifiers").isEmpty()) {
+            // Route A takes the first modifier only — stacking is not represented.
+            mod = src.getAsJsonArray("modifiers").get(0).getAsJsonObject();
+        }
+        if (mod != null) {
+            // Apoli clamp/set operations (min/max/set, base or total) have NO vanilla
+            // AttributeModifier equivalent. Mapping them to add_value corrupts the
+            // attribute — e.g. a "max_total": 60 max-health CAP becomes a flat +60 HP
+            // bonus (this pinned Deano's mage at ~37 hearts instead of the intended 7).
+            // Drop the whole modifier rather than mis-apply it as a flat addition.
+            if (mod.has("operation")
+                && !OriginsOperationMapper.isRepresentable(mod.get("operation").getAsString())) {
+                NeoOrigins.LOGGER.debug(
+                    "OriginsCompat: dropping origins:modify_attribute with non-representable "
+                    + "operation '{}' (clamp/set ops have no vanilla modifier equivalent)",
+                    mod.get("operation").getAsString());
+                return Optional.empty();
+            }
+            extractModifierFields(mod, out);
+        }
+
+        // Top-level attribute is authoritative for this shape — set it after the
+        // modifier extraction so it wins even if a stray attribute hides in the modifier.
+        if (src.has("attribute")) {
+            out.addProperty("attribute", src.get("attribute").getAsString());
+        }
+
+        if (!out.has("attribute")) throw new IllegalArgumentException("origins:modify_attribute missing 'attribute' field");
+        if (!out.has("amount"))    throw new IllegalArgumentException("origins:modify_attribute missing 'value'/'amount' field");
+
+        return Optional.of(out);
+    }
+
     /** Extracts attribute/value/operation fields from a modifier object into the target. */
     private static void extractModifierFields(JsonObject mod, JsonObject target) {
         if (mod.has("attribute")) {
@@ -962,11 +1057,44 @@ public final class OriginsPowerTranslator {
         // [LOSSY] all Origins operations (addition, multiply_base, multiply_total) collapse to (1 + value).
         out.addProperty("multiplier", (float)(1.0 + value));
 
-        // [LOSSY] block_condition is dropped — break speed is applied via the
-        // vanilla player.block_break_speed attribute, which can't filter by block.
-        // The power applies to all blocks.
+        // Best-effort: lift a simple block_condition tag into block_tag so the
+        // multiplier is restricted to the same blocks. Apoli's block_condition is a
+        // full DSL; we only translate the common single-tag shape
+        // ({"type":"...:block","block":"#tag"} or {"tag":"..."}). Anything more
+        // complex (and/or/nesting, state predicates) is dropped and the power
+        // applies to all blocks — logged so the lossiness is visible.
+        if (src.has("block_condition") && src.get("block_condition").isJsonObject()) {
+            String tag = extractSimpleBlockTag(src.getAsJsonObject("block_condition"));
+            if (tag != null) {
+                out.addProperty("block_tag", tag);
+            } else {
+                NeoOrigins.LOGGER.debug("OriginsCompat: modify_break_speed block_condition is not a simple tag/block filter — block_tag dropped, multiplier applies to all blocks");
+            }
+        }
 
         return Optional.of(out);
+    }
+
+    /**
+     * Pull a single block tag (or block id) out of the common Apoli block_condition
+     * shapes, or {@code null} if the condition is anything more complex than a flat
+     * tag/block match. Recognised: a {@code "block"}/{@code "tag"}/{@code "blocks"}
+     * string field, with or without a {@code "type":"...:block"} wrapper. A leading
+     * {@code #} is preserved so the downstream filter treats it as tag-only.
+     */
+    private static String extractSimpleBlockTag(JsonObject cond) {
+        // Reject obviously-composite conditions outright.
+        if (cond.has("conditions") || cond.has("condition")) return null;
+        for (String key : new String[]{"tag", "block", "blocks"}) {
+            if (cond.has(key) && cond.get(key).isJsonPrimitive()) {
+                String val = cond.get(key).getAsString();
+                if (val == null || val.isBlank()) return null;
+                // "tag" is implicitly a tag even without the leading #.
+                if (key.equals("tag") && !val.startsWith("#")) return "#" + val;
+                return val;
+            }
+        }
+        return null;
     }
 
     private static Optional<JsonObject> translateEntityGroup(JsonObject src) {

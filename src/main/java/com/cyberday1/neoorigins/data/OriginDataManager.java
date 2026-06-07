@@ -33,6 +33,12 @@ public class OriginDataManager extends SimplePreparableReloadListener<Map<Resour
     private static final FileToIdConverter COMPAT_CONVERTER = FileToIdConverter.json("origins");
 
     private Map<ResourceLocation, Origin> origins = new HashMap<>();
+    /** Raw post-normalize JSON for each loaded origin id, kept so the in-game
+     *  creator's "Load template" path can clone an existing origin's body
+     *  verbatim (display fields, impact, order, power list) without having to
+     *  re-serialize a parsed {@link Origin} through {@link Origin#CODEC}.
+     *  Headless tests don't populate this; templates simply find nothing. */
+    private Map<ResourceLocation, JsonObject> rawOriginJson = new HashMap<>();
     /** Bumped on every datapack reload so per-player power caches can invalidate. */
     private int version = 0;
     public int version() { return version; }
@@ -53,6 +59,22 @@ public class OriginDataManager extends SimplePreparableReloadListener<Map<Resour
             if (map.containsKey(id)) continue; // native format wins
             // Skip neoorigins namespace in the compat converter — FILE_CONVERTER already handles it
             if (converter == COMPAT_CONVERTER && NeoOrigins.MOD_ID.equals(id.getNamespace())) continue;
+            // Skip files under native data-type sub-folders — the native FILE_CONVERTER handles those.
+            // Without this filter, the compat path tries to parse `data/<ns>/origins/powers/foo.json`
+            // as a flat-layout origin and emits spurious "No key description; No key name" errors.
+            // Verified 2026-05-28 via headless server boot with a class-type datapack.
+            // NOTE: `origins/` is intentionally NOT skipped here. Native neoorigins-namespace ids
+            // are already skipped above (line 61), so this guard only sees third-party compat packs.
+            // Such packs may nest origins at `data/<ns>/origins/origins/<name>.json` and reference
+            // them by their Origins-mod nested id `<ns>:origins/<name>`; skipping the `origins/`
+            // prefix would drop those, making their layers resolve to null and auto-skip in the picker.
+            if (converter == COMPAT_CONVERTER) {
+                String path = id.getPath();
+                if (path.startsWith("powers/") || path.startsWith("origin_layers/")
+                        || path.startsWith("mob_origins/")) {
+                    continue;
+                }
+            }
             try (Reader reader = entry.getValue().openAsReader()) {
                 map.put(id, JsonParser.parseReader(reader));
             } catch (Exception e) {
@@ -64,6 +86,7 @@ public class OriginDataManager extends SimplePreparableReloadListener<Map<Resour
     @Override
     protected void apply(Map<ResourceLocation, JsonElement> pObject, ResourceManager pResourceManager, ProfilerFiller pProfiler) {
         Map<ResourceLocation, Origin> loaded = new HashMap<>();
+        Map<ResourceLocation, JsonObject> rawSnapshot = new HashMap<>();
         for (Map.Entry<ResourceLocation, JsonElement> entry : pObject.entrySet()) {
             ResourceLocation id = entry.getKey();
             try {
@@ -78,9 +101,16 @@ public class OriginDataManager extends SimplePreparableReloadListener<Map<Resour
                 // Always add the id field after normalization
                 json.addProperty("id", id.toString());
 
+                final JsonObject finalJson = json;
                 Origin.CODEC.parse(JsonOps.INSTANCE, json)
                     .resultOrPartial(err -> NeoOrigins.LOGGER.error("Failed to parse origin {}: {}", id, err))
-                    .ifPresent(origin -> loaded.put(id, origin));
+                    .ifPresent(origin -> {
+                        loaded.put(id, origin);
+                        // Stash a deep copy so the template path can hand back
+                        // the exact body that was just successfully parsed,
+                        // unaffected by any later mutation of `finalJson`.
+                        rawSnapshot.put(id, finalJson.deepCopy());
+                    });
             } catch (Exception e) {
                 NeoOrigins.LOGGER.error("Error loading origin {}", id, e);
             }
@@ -118,6 +148,11 @@ public class OriginDataManager extends SimplePreparableReloadListener<Map<Resour
         }
 
         this.origins = Collections.unmodifiableMap(loaded);
+        // Prune rawSnapshot to only the ids that survived the compat-filter loop
+        // above so template lookups don't expose origins that were intentionally
+        // hidden from players.
+        rawSnapshot.keySet().retainAll(loaded.keySet());
+        this.rawOriginJson = Collections.unmodifiableMap(rawSnapshot);
         this.version++;
         NeoOrigins.LOGGER.info("Loaded {} origins", loaded.size());
 
@@ -144,4 +179,11 @@ public class OriginDataManager extends SimplePreparableReloadListener<Map<Resour
     public Map<ResourceLocation, Origin> getOrigins() { return origins; }
     public Origin getOrigin(ResourceLocation id) { return origins.get(id); }
     public boolean hasOrigin(ResourceLocation id) { return origins.containsKey(id); }
+
+    /** Raw post-normalize origin JSON for the creator's template loader.
+     *  Returns null when the id was loaded from a non-resource path
+     *  (client sync, headless test). */
+    public JsonObject getRawOriginJson(ResourceLocation id) {
+        return rawOriginJson.get(id);
+    }
 }

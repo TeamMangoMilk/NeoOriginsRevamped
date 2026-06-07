@@ -81,9 +81,7 @@ public final class EventPowerIndex {
 
         // ----- Origins-Classes hooks: modifiers (return a float) -----
         MOD_EXHAUSTION,         // hunger drain multiplier
-        MOD_BREAK_SPEED,        // block break speed multiplier
         MOD_NATURAL_REGEN,      // natural heal amount multiplier
-        MOD_XP_GAIN,            // xp orb value multiplier
         MOD_TRADE_PRICE,        // villager trade cost multiplier
         MOD_CRAFT_AMOUNT,       // crafting output count multiplier
         MOD_ENCHANT_LEVEL,      // enchanting table level multiplier / bonus
@@ -304,6 +302,33 @@ public final class EventPowerIndex {
 
     /** Context for breed / tame events. */
     public record EntityInteractContext(net.minecraft.world.entity.LivingEntity target) {}
+
+    /**
+     * Dispatch context naming a non-actor <em>Entity</em> that should act as the
+     * origin of a sub-action — published by {@code selector_action} for each
+     * entity its vanilla selector resolved. Unlike {@link EntityInteractContext}
+     * (which is {@link net.minecraft.world.entity.LivingEntity}-typed and feeds the
+     * bientity {@code target_action} chain), this carries a bare {@link net.minecraft.world.entity.Entity}
+     * so non-living origins such as {@code area_effect_cloud} can be the source of a
+     * {@code fire_projectile} (the Toxophilite hyper_multishot AEC-rotation trick).
+     * The actor (power holder) still arrives as the {@code EntityAction} arg; this
+     * only redirects the spatial origin/rotation.
+     */
+    public record SourceEntityContext(net.minecraft.world.entity.Entity sourceEntity) {}
+
+    /**
+     * Dispatch context for a <em>block</em> impact — the block on the other side
+     * of a projectile/raycast interaction. Sibling of {@link EntityInteractContext}
+     * (the entity equivalent) on the same {@link ActionContextHolder} seam. The
+     * block-target verbs ({@code strip}/{@code till}/{@code path}/{@code grow}/
+     * {@code transform_block}) and the {@code block_target_action} wrapper resolve
+     * it via {@link com.cyberday1.neoorigins.compat.action.ActionParser#extractBlockTarget}.
+     * Carries the {@link net.minecraft.server.level.ServerLevel} and the impacted
+     * {@link net.minecraft.core.BlockPos}; the actor arrives separately as the
+     * {@code EntityAction}/{@code BlockTargetAction} arg.
+     */
+    public record BlockHitContext(net.minecraft.server.level.ServerLevel level,
+                                  net.minecraft.core.BlockPos pos) {}
 
     /** Context for trade events. */
     public record TradeContext(net.minecraft.world.item.trading.MerchantOffer offer) {}
