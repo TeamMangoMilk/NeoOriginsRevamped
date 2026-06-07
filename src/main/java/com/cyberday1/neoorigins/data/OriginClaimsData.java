@@ -70,6 +70,13 @@ public class OriginClaimsData extends SavedData {
         return owner != null && owner.equals(who) && release(layer, origin);
     }
 
+    /** Release every stored claim. Used by admin-wide origin resets. */
+    public void clear() {
+        if (claims.isEmpty()) return;
+        claims.clear();
+        setDirty();
+    }
+
     /** Read-only snapshot of all claims, for listing and sync. */
     public Map<ResourceLocation, Map<ResourceLocation, UUID>> view() {
         Map<ResourceLocation, Map<ResourceLocation, UUID>> copy = new HashMap<>();

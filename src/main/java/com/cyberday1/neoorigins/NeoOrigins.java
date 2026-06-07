@@ -87,11 +87,6 @@ public class NeoOrigins {
                 com.cyberday1.neoorigins.client.NeoOriginsClientConfig::onConfigLoadOrReload);
         }
 
-        if (FMLEnvironment.dist == Dist.CLIENT) {
-            modContainer.registerConfig(ModConfig.Type.CLIENT,
-                com.cyberday1.neoorigins.client.NeoOriginsClientConfig.SPEC);
-        }
-
         // Wire the auto-generated NeoForge config screen into the mod menu's
         // "Config" button. ConfigurationScreen + IConfigScreenFactory are
         // client-only types — load through a client-package trampoline so the
