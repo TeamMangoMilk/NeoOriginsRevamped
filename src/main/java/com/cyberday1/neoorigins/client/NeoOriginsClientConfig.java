@@ -49,7 +49,7 @@ public final class NeoOriginsClientConfig {
                      "high-contrast style (dark panels, light text, vanilla font) instead",
                      "of the parchment scroll skin. Enable this if the parchment theme's",
                      "low-contrast brown-on-paper text is hard to read.")
-            .define("classic_picker_style", false);
+            .define("classic_picker_style", true);
 
         SHOW_ORIGIN_EDITOR = BUILDER
             .comment("Show the in-game Origin Editor button on the origin info screen for",
